@@ -1,0 +1,9 @@
+- must use distrobox
+- deployment on docker
+- never use hardcoded urls
+- frontend and backend have seperate package jsons
+- never use migrations always use init.sql
+- Use JWT tokens
+- always create testing scripts for new features
+- we are targeting android and ios for the frontend
+- we must make sure that most things are reusable compnents that run individually for proof of concept

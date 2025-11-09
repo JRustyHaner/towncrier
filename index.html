@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Towncrier - Phase 0 Demonstrator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    #map { height: 500px; width: 100%; border-radius: 8px; }
+    .dark-mode { background: #101922; color: #f8fafc; }
+    .dark-mode .surface { background: #0f172a; }
+    .light-mode { background: #f6f7f8; color: #0f172a; }
+    .light-mode .surface { background: #ffffff; }
+  </style>
+</head>
+<body class="light-mode">
+  <div class="min-h-screen p-4">
+    <!-- Header -->
+    <div class="surface rounded-lg shadow-sm p-4 mb-4 flex justify-between items-center">
+      <h1 class="text-2xl font-bold">🏛️ Towncrier</h1>
+      <button id="themeToggle" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-medium transition">
+        🌙 Dark Mode
+      </button>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="surface rounded-lg shadow-sm p-4 mb-4 flex gap-2">
+      <input
+        type="text"
+        id="searchInput"
+        placeholder="Search articles..."
+        class="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+      />
+      <button id="searchBtn" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-medium transition">
+        🔍 Search
+      </button>
+    </div>
+
+    <!-- Legend -->
+    <div id="legend" class="surface rounded-lg shadow-sm p-4 mb-4 flex gap-6 overflow-x-auto">
+      <div class="flex items-center gap-2 whitespace-nowrap">
+        <div class="w-4 h-4 bg-red-500 rounded-full"></div>
+        <span class="text-sm font-medium">Retraction</span>
+      </div>
+      <div class="flex items-center gap-2 whitespace-nowrap">
+        <div class="w-4 h-4 bg-amber-500"></div>
+        <span class="text-sm font-medium">Correction</span>
+      </div>
+      <div class="flex items-center gap-2 whitespace-nowrap">
+        <div class="w-4 h-4 bg-green-500" style="clip-path: polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%);"></div>
+        <span class="text-sm font-medium">Original</span>
+      </div>
+      <div class="flex items-center gap-2 whitespace-nowrap">
+        <div class="w-4 h-4 border-2 border-blue-500 rounded-full"></div>
+        <span class="text-sm font-medium">Inciting</span>
+      </div>
+    </div>
+
+    <!-- Summary Stats -->
+    <div id="summary" class="surface rounded-lg shadow-sm p-4 mb-4 hidden">
+      <p id="summaryText" class="text-sm font-medium"></p>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div id="tabs" class="surface rounded-lg shadow-sm flex gap-0 mb-4 border-b hidden">
+      <button id="mapTab" class="flex-1 py-3 px-4 font-medium border-b-2 border-blue-500 text-blue-500 transition">
+        🗺️ Map
+      </button>
+      <button id="listTab" class="flex-1 py-3 px-4 font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 transition">
+        📋 List
+      </button>
+    </div>
+
+    <!-- Map View -->
+    <div id="mapContainer" class="mb-4 hidden">
+      <div id="map" class="surface rounded-lg shadow-sm"></div>
+    </div>
+
+    <!-- List View -->
+    <div id="listContainer" class="mb-4 hidden">
+      <div id="articlesList" class="space-y-2"></div>
+    </div>
+
+    <!-- Status Message -->
+    <div id="status" class="text-center text-gray-500 py-8 hidden">
+      <p>Enter a search term and click Search to begin</p>
+    </div>
+  </div>
+
+  <!-- Article Detail Modal -->
+  <div id="modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-end z-50">
+    <div class="surface w-full rounded-t-2xl p-6 max-h-96 overflow-y-auto">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold">Article Details</h2>
+        <button id="closeModal" class="text-2xl">✕</button>
+      </div>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = 'http://localhost:3000';
+    let isDark = false;
+    let currentArticles = [];
+    let map = null;
+    let markers = [];
+
+    // Initialize on page load - load sample data
+    window.addEventListener('load', () => {
+      loadSampleData();
+    });
+
+    // Load sample data on startup
+    async function loadSampleData() {
+      try {
+        document.getElementById('status').textContent = '📚 Loading sample articles...';
+        document.getElementById('status').classList.remove('hidden');
+
+        // Do an initial search with empty term to get all articles
+        const searchRes = await fetch(`${API_URL}/api/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ terms: [''], limit: 40 })
+        });
+        const { search_id } = await searchRes.json();
+
+        const resultsRes = await fetch(`${API_URL}/api/search/${search_id}/results`);
+        const results = await resultsRes.json();
+
+        currentArticles = results.geojson.features.map(f => ({
+          ...f.properties,
+          latitude: f.geometry.coordinates[1],
+          longitude: f.geometry.coordinates[0]
+        }));
+
+        document.getElementById('status').classList.add('hidden');
+        document.getElementById('tabs').classList.remove('hidden');
+        document.getElementById('summary').classList.remove('hidden');
+        document.getElementById('mapContainer').classList.remove('hidden');
+
+        const { total, retractions, corrections } = results.summary;
+        document.getElementById('summaryText').textContent = 
+          `${total} sample articles • ${retractions} retractions • ${corrections} corrections`;
+
+        initMap();
+        displayMap();
+        displayList();
+      } catch (error) {
+        console.error('Failed to load sample data:', error);
+        document.getElementById('status').textContent = '⚠️ Could not load sample data. Enter a search term to begin.';
+      }
+    }
+
+    // Theme Toggle
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      isDark = !isDark;
+      document.body.className = isDark ? 'dark-mode' : 'light-mode';
+      document.getElementById('themeToggle').textContent = isDark ? '☀️ Light Mode' : '🌙 Dark Mode';
+      if (map) map.invalidateSize();
+    });
+
+    // Search
+    document.getElementById('searchBtn').addEventListener('click', search);
+    document.getElementById('searchInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') search();
+    });
+
+    async function search() {
+      const term = document.getElementById('searchInput').value.trim();
+      if (!term) return;
+
+      document.getElementById('status').textContent = '🔍 Searching...';
+      document.getElementById('status').classList.remove('hidden');
+      document.getElementById('tabs').classList.add('hidden');
+      document.getElementById('summary').classList.add('hidden');
+      document.getElementById('mapContainer').classList.add('hidden');
+      document.getElementById('listContainer').classList.add('hidden');
+
+      try {
+        // Start search
+        const searchRes = await fetch(`${API_URL}/api/search`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ terms: [term], limit: 40 })
+        });
+        const { search_id } = await searchRes.json();
+
+        // Get results
+        const resultsRes = await fetch(`${API_URL}/api/search/${search_id}/results`);
+        const results = await resultsRes.json();
+
+        currentArticles = results.geojson.features.map(f => ({
+          ...f.properties,
+          latitude: f.geometry.coordinates[1],
+          longitude: f.geometry.coordinates[0]
+        }));
+
+        // Show results
+        document.getElementById('status').classList.add('hidden');
+        document.getElementById('tabs').classList.remove('hidden');
+        document.getElementById('summary').classList.remove('hidden');
+        document.getElementById('mapContainer').classList.remove('hidden');
+
+        // Update summary
+        const { total, retractions, corrections } = results.summary;
+        document.getElementById('summaryText').textContent = 
+          `Found ${total} articles • ${retractions} retractions • ${corrections} corrections`;
+
+        // Show map
+        initMap();
+        displayMap();
+        displayList();
+      } catch (error) {
+        console.error('Search failed:', error);
+        document.getElementById('status').textContent = '❌ Search failed. Make sure backend is running.';
+      }
+    }
+
+    // Map
+    function initMap() {
+      if (!map) {
+        map = L.map('map').setView([39.8, -98.5], 4);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© OpenStreetMap',
+          maxZoom: 19
+        }).addTo(map);
+      }
+    }
+
+    function displayMap() {
+      // Clear markers
+      markers.forEach(m => map.removeLayer(m));
+      markers = [];
+
+      // Add new markers
+      const statusColors = {
+        retraction: '#ef4444',
+        correction: '#f59e0b',
+        original: '#22c55e',
+        inciting: '#137fec'
+      };
+
+      currentArticles.forEach(article => {
+        const marker = L.circleMarker([article.latitude, article.longitude], {
+          radius: 8,
+          fillColor: statusColors[article.status] || '#999',
+          color: '#000',
+          weight: 2,
+          opacity: 0.8,
+          fillOpacity: 0.8
+        })
+        .bindPopup(`<strong>${article.title}</strong>`)
+        .addTo(map)
+        .on('click', () => showModal(article));
+        
+        markers.push(marker);
+      });
+
+      // Fit bounds
+      if (markers.length > 0) {
+        const group = new L.featureGroup(markers);
+        map.fitBounds(group.getBounds().pad(0.1));
+      }
+    }
+
+    // List
+    document.getElementById('mapTab').addEventListener('click', () => {
+      document.getElementById('mapContainer').classList.remove('hidden');
+      document.getElementById('listContainer').classList.add('hidden');
+      document.getElementById('mapTab').classList.add('border-blue-500', 'text-blue-500');
+      document.getElementById('mapTab').classList.remove('border-transparent', 'text-gray-500');
+      document.getElementById('listTab').classList.remove('border-blue-500', 'text-blue-500');
+      document.getElementById('listTab').classList.add('border-transparent', 'text-gray-500');
+      if (map) map.invalidateSize();
+    });
+
+    document.getElementById('listTab').addEventListener('click', () => {
+      document.getElementById('mapContainer').classList.add('hidden');
+      document.getElementById('listContainer').classList.remove('hidden');
+      document.getElementById('listTab').classList.add('border-blue-500', 'text-blue-500');
+      document.getElementById('listTab').classList.remove('border-transparent', 'text-gray-500');
+      document.getElementById('mapTab').classList.remove('border-blue-500', 'text-blue-500');
+      document.getElementById('mapTab').classList.add('border-transparent', 'text-gray-500');
+    });
+
+    function displayList() {
+      const statusIcons = { retraction: '🔴', correction: '🟨', original: '🟢', inciting: '🔵' };
+      const statusColors = {
+        retraction: '#ef4444',
+        correction: '#f59e0b',
+        original: '#22c55e',
+        inciting: '#137fec'
+      };
+
+      document.getElementById('articlesList').innerHTML = currentArticles.map(article => `
+        <button onclick="handleArticleClick(${currentArticles.indexOf(article)})" 
+                class="surface w-full p-4 rounded-lg text-left hover:shadow-md transition border-l-4 border-transparent"
+                style="border-left-color: ${statusColors[article.status]};">
+          <div class="flex items-start gap-3">
+            <div style="background-color: ${statusColors[article.status]};" class="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold flex-shrink-0">
+              ${statusIcons[article.status]}
+            </div>
+            <div class="flex-1 min-w-0">
+              <h3 class="font-semibold text-sm truncate">${article.title}</h3>
+              <p class="text-xs text-gray-500">${article.source} • ${article.city}</p>
+              <p class="text-xs text-gray-400">${new Date(article.publishDate).toLocaleDateString()}</p>
+            </div>
+          </div>
+        </button>
+      `).join('');
+    }
+
+    function handleArticleClick(index) {
+      showModal(currentArticles[index]);
+    }
+
+    function showModal(article) {
+      const modal = document.getElementById('modal');
+      const statusColors = {
+        retraction: '#ef4444',
+        correction: '#f59e0b',
+        original: '#22c55e',
+        inciting: '#137fec'
+      };
+
+      document.getElementById('modalContent').innerHTML = `
+        <div style="background-color: ${statusColors[article.status]};" class="inline-block px-3 py-1 rounded-full text-white text-xs font-bold mb-4">
+          ${article.status.toUpperCase()}
+        </div>
+        <h3 class="text-xl font-bold mb-4">${article.title}</h3>
+        <div class="space-y-2 mb-4 text-sm">
+          <p><strong>Source:</strong> ${article.source}</p>
+          <p><strong>Author:</strong> ${article.author}</p>
+          <p><strong>Date:</strong> ${new Date(article.publishDate).toLocaleString()}</p>
+          <p><strong>Location:</strong> 📍 ${article.city}</p>
+        </div>
+        <p class="mb-4 text-sm text-gray-600">${article.description}</p>
+        <a href="${article.link}" target="_blank" class="inline-block bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+          Read Full Article →
+        </a>
+      `;
+      modal.classList.remove('hidden');
+    }
+
+    document.getElementById('closeModal').addEventListener('click', () => {
+      document.getElementById('modal').classList.add('hidden');
+    });
+
+    document.getElementById('modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('modal')) {
+        document.getElementById('modal').classList.add('hidden');
+      }
+    });
+  </script>
+</body>
+</html>
