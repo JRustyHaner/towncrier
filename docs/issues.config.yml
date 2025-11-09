@@ -1,0 +1,54 @@
+# Example issue tagging keyword configuration with weights and stoplists
+version: 1
+categories:
+  lgbtq:
+    phrases:
+      - phrase: "lgbtq"
+        weight: 5
+      - phrase: "transgender"
+        weight: 4
+      - phrase: "non-binary"
+        weight: 3
+      - phrase: "gay rights"
+        weight: 3
+    stoplist:
+      - "happy"   # avoid naive 'gay' polarity ambiguity when not as identity
+  racism:
+    phrases:
+      - phrase: "racist"
+        weight: 4
+      - phrase: "racial slur"
+        weight: 5
+      - phrase: "hate crime"
+        weight: 4
+      - phrase: "racial profiling"
+        weight: 3
+    stoplist:
+      - "race car"  # avoid automotive 'race'
+  sexism:
+    phrases:
+      - phrase: "sexist"
+        weight: 4
+      - phrase: "sexual discrimination"
+        weight: 4
+      - phrase: "gender bias"
+        weight: 3
+    stoplist:
+      - "sex education" # context not necessarily sexism
+  misidentification:
+    phrases:
+      - phrase: "mistaken identity"
+        weight: 5
+      - phrase: "wrongly identified"
+        weight: 4
+      - phrase: "incorrectly named"
+        weight: 4
+      - phrase: "misidentified"
+        weight: 4
+    stoplist:
+      - "identity theft" # different concept
+thresholds:
+  confidence: 0.4
+negation:
+  tokens: ["not", "no", "never"]
+  window: 3

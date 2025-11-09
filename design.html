@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>News Tracker Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "primary": "#137fec",
+              "background-light": "#f6f7f8",
+              "background-dark": "#101922",
+            },
+            fontFamily: {
+              "display": ["Inter"]
+            },
+            borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+    </style>
+</head>
+<body class="bg-background-light dark:bg-background-dark font-display">
+<div class="relative flex h-screen w-full flex-col overflow-hidden">
+<div class="flex h-full flex-row">
+<!-- Left Sidebar (Control Panel) -->
+<aside class="flex h-full w-full max-w-sm flex-col border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+<div class="flex flex-col gap-4 p-4 border-b border-slate-200 dark:border-slate-800">
+<div class="flex flex-col">
+<h1 class="text-slate-900 dark:text-slate-50 text-base font-bold leading-normal">News Tracker</h1>
+<p class="text-slate-500 dark:text-slate-400 text-sm font-normal leading-normal">Retractions &amp; Corrections</p>
+</div>
+</div>
+<div class="flex grow flex-col overflow-y-auto px-4">
+<!-- Search Bar -->
+<div class="py-3">
+<label class="flex flex-col min-w-40 h-12 w-full">
+<div class="flex w-full flex-1 items-stretch rounded-lg h-full">
+<div class="text-slate-500 dark:text-slate-400 flex border-none bg-slate-100 dark:bg-slate-800 items-center justify-center pl-4 rounded-l-lg border-r-0">
+<span class="material-symbols-outlined text-2xl">search</span>
+</div>
+<input class="form-input flex w-full min-w-0 flex-1 resize-none overflow-hidden rounded-lg text-slate-900 dark:text-slate-50 focus:outline-0 focus:ring-2 focus:ring-primary/50 border-none bg-slate-100 dark:bg-slate-800 h-full placeholder:text-slate-500 dark:placeholder:text-slate-400 px-4 rounded-l-none border-l-0 pl-2 text-base font-normal leading-normal" placeholder="Search by keyword, publication..." value=""/>
+</div>
+</label>
+</div>
+<!-- Section Header -->
+<h3 class="text-slate-900 dark:text-slate-50 text-lg font-bold leading-tight tracking-[-0.015em] px-0 pb-2 pt-4">Filter Events</h3>
+<!-- Accordions -->
+<div class="flex flex-col">
+<details class="flex flex-col border-t border-t-slate-200 dark:border-t-slate-700 py-2 group" open="">
+<summary class="flex cursor-pointer items-center justify-between gap-6 py-2">
+<p class="text-slate-900 dark:text-slate-50 text-sm font-medium leading-normal">Date Range</p>
+<div class="text-slate-900 dark:text-slate-50 group-open:rotate-180 transition-transform">
+<span class="material-symbols-outlined text-xl">expand_more</span>
+</div>
+</summary>
+<div class="flex flex-col gap-3 pb-2 pt-2">
+<div class="flex items-center gap-2">
+<input class="form-input w-full rounded-md border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-300 focus:ring-primary/50 focus:border-primary" type="date"/>
+<span class="text-slate-500 dark:text-slate-400">-</span>
+<input class="form-input w-full rounded-md border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm text-slate-700 dark:text-slate-300 focus:ring-primary/50 focus:border-primary" type="date"/>
+</div>
+</div>
+</details>
+<details class="flex flex-col border-t border-t-slate-200 dark:border-t-slate-700 py-2 group">
+<summary class="flex cursor-pointer items-center justify-between gap-6 py-2">
+<p class="text-slate-900 dark:text-slate-50 text-sm font-medium leading-normal">Topics</p>
+<div class="text-slate-900 dark:text-slate-50 group-open:rotate-180 transition-transform">
+<span class="material-symbols-outlined text-xl">expand_more</span>
+</div>
+</summary>
+<div class="flex flex-col gap-2 pt-2 pb-2">
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="form-checkbox h-4 w-4 rounded text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" type="checkbox"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Politics</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="form-checkbox h-4 w-4 rounded text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" type="checkbox"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Science</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input checked="" class="form-checkbox h-4 w-4 rounded text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" type="checkbox"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Health</span>
+</label>
+</div>
+</details>
+<details class="flex flex-col border-t border-b border-b-slate-200 dark:border-b-slate-700 border-t-slate-200 dark:border-t-slate-700 py-2 group">
+<summary class="flex cursor-pointer items-center justify-between gap-6 py-2">
+<p class="text-slate-900 dark:text-slate-50 text-sm font-medium leading-normal">Event Type</p>
+<div class="text-slate-900 dark:text-slate-50 group-open:rotate-180 transition-transform">
+<span class="material-symbols-outlined text-xl">expand_more</span>
+</div>
+</summary>
+<div class="flex flex-col gap-2 pt-2 pb-2">
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="form-radio h-4 w-4 text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" name="event-type" type="radio"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">All</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input checked="" class="form-radio h-4 w-4 text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" name="event-type" type="radio"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Inciting Incident</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="form-radio h-4 w-4 text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" name="event-type" type="radio"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Correction</span>
+</label>
+<label class="flex items-center gap-2 cursor-pointer">
+<input class="form-radio h-4 w-4 text-primary focus:ring-primary/50 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800" name="event-type" type="radio"/>
+<span class="text-slate-600 dark:text-slate-300 text-sm">Retraction</span>
+</label>
+</div>
+</details>
+</div>
+</div>
+<!-- Apply Button -->
+<div class="flex p-4 border-t border-slate-200 dark:border-slate-700 mt-auto">
+<button class="flex min-w-[84px] w-full max-w-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-lg h-10 px-4 bg-primary text-slate-50 text-sm font-bold leading-normal tracking-[0.015em] hover:bg-primary/90 transition-colors">
+<span class="truncate">Apply Filters</span>
+</button>
+</div>
+</aside>
+<!-- Central Area (Map View) -->
+<main class="flex-1 bg-background-light dark:bg-background-dark relative">
+<div class="absolute inset-0 z-0">
+<img class="h-full w-full object-cover opacity-70" data-alt="Abstract world map with a dark, modern theme" src="https://lh3.googleusercontent.com/aida-public/AB6AXuA6gatvIitsdPuu89uh9bBaxaSZNcxu3PxlaMSWmmw18_O2kFHVG_Ldkj34U1sQi4qkTWC-Z9yYi_OH57twpYF-PvVTVS7emUYojWPVP08wFZMXIgvSckO_Xkea2mHtcyx9dm2uAhNfwbvsUp217n-N-WOG8xCKc9pphwsGQqyPQIOWnd4Xh2vQI4Es3E3pIVE6BfGyN9zNcAaqlzTcz79Ph4F4X2zaL0JXyfl5rYpd000R6d3xUYrQjrutKgdAUuKLEMOZdWB4y8s"/>
+</div>
+<div class="absolute inset-0 bg-gradient-to-t from-background-dark/50 to-transparent"></div>
+<div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
+<div class="h-10 w-10 flex items-center justify-center rounded-full bg-red-500/30">
+<div class="h-5 w-5 rounded-full bg-red-500 animate-pulse"></div>
+</div>
+<span class="text-white text-sm font-semibold bg-black/50 px-2 py-1 rounded-md">New York, USA</span>
+</div>
+</main>
+<!-- Right Sidebar (Detail Panel) -->
+<aside class="flex h-full w-full max-w-sm flex-col border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50">
+<div class="flex h-full flex-col items-center justify-center p-8 text-center">
+<span class="material-symbols-outlined text-5xl text-slate-400 dark:text-slate-500 mb-4">location_off</span>
+<p class="text-slate-600 dark:text-slate-400 text-base font-medium">Select an event on the map</p>
+<p class="text-slate-500 dark:text-slate-500 text-sm">Details will appear here once you choose an incident.</p>
+</div>
+<!-- Active state would replace the above div -->
+<!-- 
+                <div class="flex flex-col h-full">
+                    <div class="p-4 border-b border-slate-200 dark:border-slate-800">
+                        <h2 class="text-lg font-bold text-slate-900 dark:text-slate-50">Misleading Health Study Report</h2>
+                        <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">A major publication incorrectly reported the findings of a recent study on vaccine efficacy, leading to widespread public confusion.</p>
+                        <div class="flex items-center gap-4 mt-3 text-xs text-slate-500 dark:text-slate-500">
+                            <span>Publication: Daily News</span>
+                            <span>Date: Oct 26, 2023</span>
+                        </div>
+                    </div>
+                    <div class="flex-grow p-4 overflow-y-auto">
+                        <h3 class="text-base font-semibold text-slate-800 dark:text-slate-200 mb-3">Timeline</h3>
+                        <ol class="relative border-l border-slate-200 dark:border-slate-700 space-y-6 ml-2">                  
+                            <li class="ml-6">            
+                                <span class="absolute flex items-center justify-center w-6 h-6 bg-red-100 rounded-full -left-3 ring-4 ring-white dark:ring-slate-900 dark:bg-red-900">
+                                    <span class="material-symbols-outlined text-sm text-red-600 dark:text-red-300">report</span>
+                                </span>
+                                <h4 class="flex items-center mb-1 text-sm font-semibold text-slate-900 dark:text-white">Initial Report</h4>
+                                <time class="block mb-2 text-xs font-normal leading-none text-slate-400 dark:text-slate-500">October 26th, 2023</time>
+                            </li>
+                            <li class="ml-6">
+                                <span class="absolute flex items-center justify-center w-6 h-6 bg-amber-100 rounded-full -left-3 ring-4 ring-white dark:ring-slate-900 dark:bg-amber-900">
+                                    <span class="material-symbols-outlined text-sm text-amber-600 dark:text-amber-300">edit_note</span>
+                                </span>
+                                <h4 class="mb-1 text-sm font-semibold text-slate-900 dark:text-white">Correction Issued</h4>
+                                <time class="block mb-2 text-xs font-normal leading-none text-slate-400 dark:text-slate-500">October 28th, 2023</time>
+                            </li>
+                        </ol>
+
+                        <h3 class="text-base font-semibold text-slate-800 dark:text-slate-200 mt-6 mb-3">Linked Sources</h3>
+                        <ul class="space-y-2">
+                            <li><a href="#" class="flex items-center gap-2 text-sm text-primary hover:underline"><span class="material-symbols-outlined text-base">link</span>Original Article</a></li>
+                            <li><a href="#" class="flex items-center gap-2 text-sm text-primary hover:underline"><span class="material-symbols-outlined text-base">link</span>Correction Notice</a></li>
+                            <li><a href="#" class="flex items-center gap-2 text-sm text-primary hover:underline"><span class="material-symbols-outlined text-base">link</span>Related Coverage</a></li>
+                        </ul>
+                    </div>
+                </div> 
+                -->
+</aside>
+</div>
+</div>
+</body></html>
