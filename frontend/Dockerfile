@@ -4,10 +4,10 @@ WORKDIR /app
 
 COPY package.json package-lock.json* ./
 
-RUN npm ci && npx expo install
+RUN npm install --legacy-peer-deps
 
 COPY . .
 
 EXPOSE 8081
 
-CMD ["npm", "start", "--", "--tunnel"]
+CMD ["npx", "expo", "start", "--web"]

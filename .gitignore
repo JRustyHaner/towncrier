@@ -8,3 +8,6 @@ server/dist/
 # Expo
 .expo/
 .expo-shared/
+
+# API keys
+api_key.txt

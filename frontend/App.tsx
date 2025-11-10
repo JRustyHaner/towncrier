@@ -37,6 +37,23 @@ interface Legend {
   statuses: Record<string, { color: string; shape: string; label: string }>;
 }
 
+interface TrendPolygon {
+  id: string;
+  geometry: {
+    type: 'Polygon';
+    coordinates: Array<Array<[number, number]>>;
+  };
+  properties: {
+    timeRange: { start: string; end: string };
+    intensity: number;
+    intensityPercentage: number;
+    phase: string;
+    color: string;
+    opacity: number;
+    tooltip: string;
+  };
+}
+
 const API_BASE_URL = 'http://localhost:3000';
 
 export default function App() {
@@ -48,6 +65,10 @@ export default function App() {
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [summary, setSummary] = useState({ total: 0, retractions: 0, corrections: 0, originals: 0, inciting: 0 });
   const [activeTab, setActiveTab] = useState<'map' | 'list'>('map');
+  const [trendPolygons, setTrendPolygons] = useState<TrendPolygon[]>([]);
+  const [showTrendOverlay, setShowTrendOverlay] = useState(false);
+  const [trendKeyword, setTrendKeyword] = useState('');
+  const [trendStats, setTrendStats] = useState<any>(null);
 
   // Color scheme
   const colors = isDark
@@ -90,12 +111,36 @@ export default function App() {
       const searchRes = await fetch(`${API_BASE_URL}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ terms: [searchTerm], limit: 40 })
+        body: JSON.stringify({ terms: [searchTerm], limit: 1000 })
       });
       const { search_id } = await searchRes.json();
 
-      const resultsRes = await fetch(`${API_BASE_URL}/api/search/${search_id}/results`);
-      const results = await resultsRes.json();
+      // Poll for results with exponential backoff
+      let results;
+      let attempts = 0;
+      const maxAttempts = 30; // 30 attempts * increasing delays = ~30 seconds max
+      let delay = 500; // Start with 500ms
+
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, delay));
+        const resultsRes = await fetch(`${API_BASE_URL}/api/search/${search_id}/results`);
+        
+        if (!resultsRes.ok) {
+          attempts++;
+          delay = Math.min(delay * 1.2, 2000); // Exponential backoff, max 2 seconds
+          continue;
+        }
+
+        results = await resultsRes.json();
+        if (results.ready) break;
+        
+        attempts++;
+        delay = Math.min(delay * 1.2, 2000);
+      }
+
+      if (!results) {
+        throw new Error('Search results not ready after timeout');
+      }
 
       // Convert GeoJSON features to articles with coordinates
       const articlesWithCoords = results.geojson.features.map((feature: any) => ({
@@ -108,6 +153,33 @@ export default function App() {
       setSummary(results.summary);
     } catch (error) {
       console.error('Search failed:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchTrendVisualization = async (keyword: string) => {
+    if (!keyword.trim()) return;
+
+    setLoading(true);
+    setTrendKeyword(keyword);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/trends/${encodeURIComponent(keyword)}`);
+      if (!res.ok) {
+        throw new Error(`Failed to fetch trends: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      
+      // Extract polygons from visualization
+      if (data.visualization && data.visualization.polygons) {
+        setTrendPolygons(data.visualization.polygons);
+        setTrendStats(data.statistics);
+        setShowTrendOverlay(true);
+      }
+    } catch (error) {
+      console.error('Trend visualization failed:', error);
+      alert(`Failed to load trend visualization: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -149,7 +221,7 @@ export default function App() {
 
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
-        <Text style={[styles.title, { color: colors.text }]}>Towncrier</Text>
+        <Text style={[styles.title, { color: colors.text }]}>Town Crier</Text>
         <TouchableOpacity
           onPress={() => setIsDark(!isDark)}
           style={[styles.themeToggle, { backgroundColor: colors.primary }]}
@@ -249,6 +321,46 @@ export default function App() {
         </View>
       )}
 
+      {/* Trend Controls - Always visible when articles are displayed */}
+      {articles.length > 0 && (
+        <View style={[styles.trendControlsContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.trendControlLabel, { color: colors.text }]}>Trend Overlay:</Text>
+          <TouchableOpacity
+            onPress={() => {
+              if (searchTerm.trim()) {
+                fetchTrendVisualization(searchTerm);
+              }
+            }}
+            style={[
+              styles.trendButton,
+              { 
+                backgroundColor: showTrendOverlay ? colors.primary : colors.border,
+                opacity: loading ? 0.6 : 1
+              }
+            ]}
+            disabled={loading}
+          >
+            <MaterialCommunityIcons 
+              name={showTrendOverlay ? 'chart-line' : 'chart-line-variant'} 
+              size={16} 
+              color="white" 
+            />
+            <Text style={styles.trendButtonText}>
+              {loading ? 'Loading...' : showTrendOverlay ? 'Active' : 'Load Trends'}
+            </Text>
+          </TouchableOpacity>
+          {trendStats && showTrendOverlay && (
+            <View style={[styles.trendStatsCompact, { backgroundColor: colors.background }]}>
+              <Text style={[styles.trendStatText, { color: colors.textSecondary }]}>
+                📈 Peak: {trendStats.peakIntensity}% | 
+                Days: {trendStats.lifespanDays}
+                {trendStats.timeToDeathDays ? ` | Death: ${trendStats.timeToDeathDays}d` : ''}
+              </Text>
+            </View>
+          )}
+        </View>
+      )}
+
       {/* Map View */}
       {activeTab === 'map' && articles.length > 0 && (
         <MapView
@@ -260,6 +372,7 @@ export default function App() {
             status: article.status,
             color: getStatusColor(article.status)
           }))}
+          trendPolygons={showTrendOverlay ? trendPolygons : []}
           onMarkerPress={(marker) => {
             const article = articles.find(a => a.id === marker.id);
             if (article) setSelectedArticle(article);
@@ -572,5 +685,41 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 14,
     fontWeight: '600'
+  },
+  trendControlsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    gap: 12
+  },
+  trendControlLabel: {
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  trendButton: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    alignItems: 'center',
+    gap: 6
+  },
+  trendButtonText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+  trendStatsCompact: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+    marginLeft: 'auto'
+  },
+  trendStatText: {
+    fontSize: 11,
+    fontWeight: '500'
   }
+
 });

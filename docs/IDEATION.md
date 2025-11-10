@@ -5,7 +5,7 @@ Visualize the geographic origin (source headquarters) and reported city of news 
 
 ## 2. Core User Flow
 1. User enters one or more search terms in the search box.
-2. Backend fetches predefined RSS feeds (e.g., NYT, Washington Post, major aggregators) and filters articles matching terms (define AND/OR semantics; default OR with phrase matching).
+2. Backend fetches news articles from the newsdata.io API using the provided API key and filters articles matching terms (define AND/OR semantics; default OR with phrase matching).
 3. For each candidate article (up to user-selected limit 20–100):
    - Fetch and parse article HTML.
    - Extract text + metadata (title, author, publish date).
@@ -28,7 +28,7 @@ Containerization: Docker for all services; docker-compose for local orchestratio
 [Browser]
    | REST/JSON (search, results, stats)
 [Express API]
-   |-- RSS Fetcher (async)
+   |-- Newsdata.io Fetcher (async)
    |-- Article Parser (Cheerio / @postlight/parser)
    |-- Classification & City Extraction
    |-- Source HQ Resolver (Wikipedia/Wikidata)
@@ -43,7 +43,7 @@ Entity: ArticleRecord
 - search_id (UUID)
 - search_terms (string[])
 - source_name (string)
-- feed_name (string)
+- source_api (string) // e.g., 'newsdata.io'
 - article_url (string)
 - canonical_url (string)
 - title (string)
@@ -78,7 +78,7 @@ Entity: SearchSession
 - correction_count (number)
 
 ## 5. Pipelines & Key Steps
-1. RSS Fetch: Parallel fetch with rate limits & per-request timeout.
+1. Newsdata.io Fetch: Parallel API requests with rate limits & per-request timeout.
 2. Filter Articles: Simple term matching (case-insensitive; whole word or phrase). Consider stemming minimal or none initially.
 3. Article Fetch: HTTP GET with retries (exponential backoff), max body size, user-agent string.
 4. Parse HTML: Cheerio or @postlight/parser for readable text. Strip scripts/styles/nav.
@@ -105,14 +105,20 @@ Entity: SearchSession
 - Wikipedia / Wikidata: obey usage guidelines; backoff on 429.
 - No Redis sliding window; optional in-memory counters only (best effort, non-authoritative).
 
+**newsdata.io Free API Credit Limitation:**
+- The free newsdata.io API plan allows up to 200 daily credits. Each API call consumes one credit.
+- The backend tracks the number of API calls made per day and will not exceed 200 requests in a 24-hour period.
+- If the daily quota is reached, further searches will be rejected with an informative error message until the quota resets.
+- Usage count is tracked in-memory and/or via persistent storage if available, and is reset at midnight UTC.
+
 ## 7. Caching Strategy (Ephemeral Only)
 - No cross-request or cross-session caching.
 - Optional micro-caches scoped strictly to a single in-flight search (e.g., de-duplicate within the same run).
-- Conditional requests: respect ETag/Last-Modified where feeds support it to reduce bandwidth without storing content locally.
+- Conditional requests: respect API rate limits and pagination to reduce bandwidth and avoid quota exhaustion.
 
 ## 8. Error Handling & Resilience
 Error taxonomy:
-- RSS_FETCH_FAILED
+- API_FETCH_FAILED
 - ARTICLE_FETCH_TIMEOUT / PAYWALL / FORBIDDEN / NOT_FOUND
 - PARSE_FAILED
 - CITY_NOT_FOUND
@@ -121,7 +127,7 @@ Error taxonomy:
 Principles:
 - Fail soft: include partial dataset; record fetch_error per article.
 - Circuit breaker: if repeated failures for a domain exceed threshold, pause further fetches in session.
-- Timeouts: RSS (5s), Article (8s), Wikipedia (4s).
+- Timeouts: API (5s), Article (8s), Wikipedia (4s).
 - Retries: 2 attempts with exponential backoff base 300ms.
 - User feedback: UI badges for error states; tooltip details.
 
@@ -174,7 +180,7 @@ Extensibility:
 
 ## 10. Logging & Observability (Structured Logs)
 - Use pino or winston with JSON output.
-- Log schema includes: timestamp, level, msg, search_id, article_url, phase (RSS_FETCH|PARSE|CLASSIFY), duration_ms, error_code.
+- Log schema includes: timestamp, level, msg, search_id, article_url, phase (API_FETCH|PARSE|CLASSIFY), duration_ms, error_code.
 - Aggregate metrics: success rate per phase, average fetch duration, retraction/correction ratios.
 - Expose /api/health & /api/metrics (Prometheus format) for container monitoring.
 - Enable trace IDs (search_id reused) for correlation.
@@ -182,7 +188,7 @@ Extensibility:
 
 ## 11. Security & Safety Considerations
 - Input sanitation for search terms (length cap, allowed chars).
-- Prevent SSRF: restrict article fetching to whitelisted domains from predefined feeds list.
+- Prevent SSRF: restrict article fetching to domains returned by the newsdata.io API.
 - Respect robots.txt for article pages if accessible before crawl (optional optimization pass).
 - Limit max HTML size (e.g., 1.5MB) to avoid memory pressure.
 - Remove script/style tags before regex scanning.
@@ -206,16 +212,16 @@ Logging:
 - LOCATION_CONF_THRESHOLD default 0.5.
 - ENABLE_SOURCE_LAYER (boolean).
 - RETRY_LIMIT adjustable.
-- FEED_LIST external JSON for updates without redeploy.
+- API source and parameters configurable via environment variables or config file.
  - ENABLE_ISSUE_TAGS (boolean) master flag for issue classification.
  - ISSUE_CONF_THRESHOLD (number) default 0.4.
 
 ## 14. Testing Strategy
 - Unit: term matching, keyword classification, city regex.
-- Integration: end-to-end search pipeline with mocked HTTP feeds.
+- Integration: end-to-end search pipeline with mocked newsdata.io API responses.
 - Snapshot: GeoJSON output shape.
 - Performance: ensure search 50 articles completes < N seconds (define target, e.g., 6s median).
-- Chaos: simulate feed timeouts.
+- Chaos: simulate API timeouts.
  - Issue Tagging: unit tests for keyword matching, negation handling, confidence scoring; integration tests ensuring tags appear only with threshold met; false positive regression set.
 
 ## 15. Metrics & KPIs
@@ -254,7 +260,7 @@ server/
          health.ts             # /api/health
          metrics.ts            # /api/metrics (Prometheus)
       services/
-         rssFetcher.ts         # Fetch & filter feeds
+         newsFetcher.ts         # Fetch & filter newsdata.io API
          articleFetcher.ts     # HTTP fetch with retries
          parser.ts             # HTML -> text extraction
          cityExtractor.ts      # City detection logic
@@ -351,8 +357,8 @@ app.use((err, req, res, next) => {
 ### Pipeline Orchestrator (Pseudocode)
 ```ts
 async function runSearchPipeline(searchId, terms, limit) {
-   const feeds = await fetchFeeds();
-   const candidates = filterByTerms(feeds.articles, terms, limit * 2); // oversample before dedup
+   const articles = await fetchNewsdataArticles();
+   const candidates = filterByTerms(articles, terms, limit * 2); // oversample before dedup
    const unique = dedupe(candidates).slice(0, limit);
    const earliest = findEarliest(unique);
    await Promise.all(unique.map(a => processArticle(a, earliest)));
@@ -408,7 +414,7 @@ async function runSearchPipeline(searchId, terms, limit) {
 - `towncrier_city_confidence_bucket{le="0.5"}` histogram.
 
 ### Security Measures
-- Whitelist feed domains; block any external URL not in whitelist.
+- Only fetch articles and content from URLs provided by the newsdata.io API.
 - Strip HTML potentially malicious content; disallow inline event handlers.
 - Rate limit per IP; identify abuse patterns (excessive searches) and temporarily ban.
 
@@ -490,7 +496,7 @@ const bloom = new BloomFilter(10_000, 4); // approximate settings
 ## 17. Next Steps (Initial Implementation Path)
 1. Scaffold Express + TypeScript project structure.
 2. Implement /api/search (stub) and mock response.
-3. Add RSS fetch + term filter + dedup core.
+3. Add newsdata.io API fetch + term filter + dedup core.
 4. Add city extraction (regex + gazetteer) minimal subset.
 5. Add classification keywords + earliest article logic.
 6. Return GeoJSON for map; build React map w/ Leaflet + clustering.
@@ -501,11 +507,11 @@ const bloom = new BloomFilter(10_000, 4); // approximate settings
 
 ## 18. Original Requirements (Preserved)
 - Map display
-- Search box triggers RSS search
+- Search box triggers newsdata.io API search
 - Toggle between source location & article city
 - Wikipedia API for HQ
 - Scrape city from article
-- Predefined RSS sources
+- Uses newsdata.io API as news source
 - Timeline filtering
 - Keyword detection for retractions/corrections
 - Color-coded nodes (red/yellow/green/blue)

@@ -13,7 +13,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 
 ### Tasks
 1. **Backend (2–3 days)**
-   - Mock RSS fetcher returning static feed of articles.
+   - Mock Newsdata API fetcher returning static feed of articles.
    - City extraction stub (use fake lat/lng).
    - Status classifier stub (mark as "original" or "retraction").
    - POST /api/search returns mock GeoJSON immediately (no async yet).
@@ -45,7 +45,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 **Goal:** Full MVP feature set per user stories Must-Have list.
 
 ### Deliverables
-- Real RSS fetching (subset of predefined feeds).
+- Real Newsdata API fetching (subset of predefined feeds).
 - City extraction (regex + gazetteer, ~50% accuracy acceptable).
 - Status classification (keyword rules).
 - Timeline slider (date range filter).
@@ -56,8 +56,8 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 
 ### Tasks
 1. **Backend (5–7 days)**
-   - RSS Fetcher service
-     - Fetch NYT, Washington Post, Reuters, BBC RSS feeds.
+   - Newsdata API Fetcher service
+     - Fetch NYT, Washington Post, Reuters, BBC Newsdata.ios.
      - Parse articles: title, author, publish date, link.
      - Rate limit: 1 req/sec per domain.
    - City Extraction
@@ -156,7 +156,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 
 3. **Testing & Docs**
    - Unit tests for city extractor, classifier, issue tagger.
-   - Integration test: mock RSS feed → full pipeline.
+   - Integration test: mock Newsdata.io → full pipeline.
    - API documentation (OpenAPI/Swagger snippet).
    - Troubleshooting guide (distrobox issues, backend not reachable, etc.).
 
@@ -189,7 +189,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 | Phase | Duration | Key Milestone |
 |-------|----------|---------------|
 | 0 (Demo) | 1–2 weeks | Map + search + mock data |
-| 1 (MVP) | 3–5 weeks | Full core features, real RSS, filters, metrics |
+| 1 (MVP) | 3–5 weeks | Full core features, real Newsdata API, filters, metrics |
 | 2 (Polish) | 2–3 weeks | Export, cancellation, onboarding, perf optimization |
 | 3 (Extras) | TBD | Research tools, admin, feedback, i18n |
 
@@ -205,7 +205,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 - Expo CLI and react-native-maps working.
 
 ### Soft Blockers (manage during Phase 1)
-- RSS feed stability (some feeds may be rate-limited; have fallbacks).
+- Newsdata.io stability (some feeds may be rate-limited; have fallbacks).
 - City gazetteer accuracy (50% is acceptable for MVP; improve later).
 - Marker clustering library choice (test performance with 100+ markers).
 
@@ -213,7 +213,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 
 ## Risk Mitigation
 
-1. **Slow RSS fetches**: Implement timeout + circuit breaker early (Phase 1).
+1. **Slow Newsdata API fetches**: Implement timeout + circuit breaker early (Phase 1).
 2. **City extraction false positives**: Start with conservative matching; relax if needed.
 3. **Map performance**: Use clustering + virtualization if >200 markers.
 4. **Expo deployment**: Test tunnel mode early; have web fallback.
@@ -230,7 +230,7 @@ Target: MVP launch with demonstrator first, then flesh out core features, then p
 
 ### Phase 1
 - [ ] MVP Must-Have features > 70% implemented.
-- [ ] Real data from RSS feeds.
+- [ ] Real data from Newsdata.ios.
 - [ ] Accessible via keyboard + color-blind shapes.
 - [ ] Performance target met.
 

@@ -14,18 +14,3 @@ services:
     volumes:
       - ./server/src:/app/src
     command: npm run dev
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "8081:8081"
-    environment:
-      - EXPO_PUBLIC_API_URL=http://server:3000
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-    depends_on:
-      - server
-    command: npx expo start --web

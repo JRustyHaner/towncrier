@@ -44,11 +44,11 @@ export async function getLegend(): Promise<Legend> {
   return res.json();
 }
 
-export async function search(terms: string[]): Promise<{ search_id: string; status: string }> {
+export async function search(terms: string[], limit: number = 1000): Promise<{ search_id: string; status: string }> {
   const res = await fetch(`${API_BASE_URL}/api/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ terms, limit: 40 })
+    body: JSON.stringify({ terms, limit })
   });
   return res.json();
 }
