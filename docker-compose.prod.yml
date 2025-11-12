@@ -7,8 +7,8 @@ services:
       dockerfile: Dockerfile.prod
     image: jrustyhaner/towncrier-server:latest
     restart: always
-    expose:
-      - 3001
+    ports:
+      - "3001:3001"
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -33,7 +33,7 @@ services:
     expose:
       - 8081
     environment:
-      - EXPO_PUBLIC_API_URL=http://server:3001
+      - EXPO_PUBLIC_API_URL=https://towncrier-api.rustyhaner.com
       - NODE_ENV=production
     networks:
       - nginx_default

@@ -5,6 +5,7 @@
 
 import { newsdataFetcher, Article } from './newsdataFetcher.js';
 import googleNewsScraper from 'google-news-scraper';
+import getProxies from 'get-free-https-proxy';
 
 export interface HybridArticle extends Article {
   source_type?: 'newsdata' | 'google-news';
@@ -105,7 +106,7 @@ class HybridFetcher {
   }
 
   /**
-   * Fetch from Google News Scraper with pagination support
+   * Fetch from Google News Scraper with pagination support and proxy fallback
    */
   private async fetchFromGoogleNews(
     terms: string[],
@@ -121,6 +122,15 @@ class HybridFetcher {
       const allArticles: Article[] = [];
       const seenTitles = new Set<string>();
 
+      // Try to get free proxies
+      let proxies: Array<{ host: string; port: number }> = [];
+      try {
+        proxies = await getProxies();
+        console.log(`Loaded ${proxies.length} free proxies for Google News scraping`);
+      } catch (err) {
+        console.warn('Failed to load free proxies, will attempt without proxy:', err);
+      }
+
       // Make multiple requests to get more results
       // Google News typically returns ~40 results per request
       // We'll make multiple requests with different timeframes to maximize coverage over past 10 years
@@ -132,11 +142,25 @@ class HybridFetcher {
         try {
           console.log(`Fetching Google News for "${searchTerm}" with timeframe ${timeframe}...`);
 
+          // Get a random proxy if available
+          const proxy = proxies.length > 0 ? proxies[Math.floor(Math.random() * proxies.length)] : undefined;
+          const proxyUrl = proxy ? `http://${proxy.host}:${proxy.port}` : undefined;
+
+          if (proxyUrl) {
+            console.log(`Using proxy: ${proxy?.host}:${proxy?.port}`);
+          }
+
+          // Add proxy to puppeteer args if available
+          const puppeteerArgsWithProxy = [
+            ...puppeteerArgs,
+            ...(proxyUrl ? [`--proxy-server=${proxyUrl}`] : [])
+          ];
+
           const googleArticles = await this.withTimeout(
             googleNewsScraper({
               searchTerm,
               limit: 40, // Each request gets ~40 results
-              puppeteerArgs,
+              puppeteerArgs: puppeteerArgsWithProxy,
               puppeteerHeadlessMode: true,
               logLevel: 'error',
               timeframe,
