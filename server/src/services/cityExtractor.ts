@@ -194,7 +194,7 @@ const sourceLocationMapping: Record<string, ExtractedCity> = {
     latitude: 33.7490,
     longitude: -84.3880,
     confidence: 0.98,
-    source: 'source'
+    source: 'source'mailing address of news sources json
   },
 };
 
@@ -224,16 +224,64 @@ const stateAbbreviations: Record<string, string> = {
  * 2. Text-based location from comprehensive database
  * 3. Fallback to distributed major US cities
  */
-export function extractCity(
+export async function extractCity(
   text: string,
   articleIndex: number,
   source?: string,
-  title?: string
-): ExtractedCity {
+  title?: string,
+  link?: string,
+): Promise<ExtractedCity> {
   const lowerText = text.toLowerCase();
   const lowerSource = source?.toLowerCase() || '';
 
-  // PRIORITY 1: Check source location mapping first (most reliable)
+  
+
+  // PRIORITY 1.5: get the contents of the original link, after a timeout, and search for location info in the text
+  // This is more expensive so we do it after the initial url parsing
+  if (link) {
+    try {
+      console.log(`Extracting city from URL content: ${link}`);
+      // fetch the page content with a timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
+      
+      try {
+        const response = await fetch(link, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const pageText = await response.text();
+        const lowerPageText = pageText.toLowerCase();
+        
+        // Search for city mentions in the page text
+        for (const [cityKeyword, cityData] of Object.entries(usCitiesDatabase)) {
+          if (lowerPageText.includes(cityKeyword)) {
+            return {
+              name: cityData.name,
+              latitude: cityData.latitude,
+              longitude: cityData.longitude,
+              confidence: cityData.confidence * 0.85,
+              source: 'url-content'
+            };
+          }
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        // Fetch failed or timed out, log and continue to next priority
+        const errorMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        console.log(`  [URL fetch failed: ${errorMsg}] Continuing with other extraction methods...`);
+      }
+    }
+    catch (e) {
+      // Outer error handler - should not happen but safety net
+      console.log(`  [URL extraction outer error] Continuing with other extraction methods...`);
+    }
+  }
+
+  // PRIORITY 2: Check source location mapping first (most reliable)
   if (source) {
     const sourceKey = lowerSource;
     if (sourceLocationMapping[sourceKey]) {
@@ -248,7 +296,7 @@ export function extractCity(
     }
   }
 
-  // PRIORITY 2: Check for city mentions in text using comprehensive database
+  // PRIORITY 3: Check for city mentions in text using comprehensive database
   const sortedCities = Object.entries(usCitiesDatabase).sort((a, b) => b[0].length - a[0].length);
 
   // Check article text
@@ -280,24 +328,14 @@ export function extractCity(
     }
   }
 
-  // PRIORITY 3: Fallback - distribute articles across major US cities
-  const majorCities = [
-    usCitiesDatabase['new york'],
-    usCitiesDatabase['los angeles'],
-    usCitiesDatabase['chicago'],
-    usCitiesDatabase['houston'],
-    usCitiesDatabase['phoenix'],
-    usCitiesDatabase['philadelphia'],
-    usCitiesDatabase['san antonio'],
-    usCitiesDatabase['san diego'],
-    usCitiesDatabase['dallas'],
-    usCitiesDatabase['san jose'],
-  ];
 
-  const fallbackCity = majorCities[articleIndex % majorCities.length];
+
+  // PRIORITY : Fallback to return a null value if no city found
   return {
-    ...fallbackCity,
-    confidence: 0.5,
-    source: 'fallback'
+    name: 'Unknown',
+    latitude: 0,
+    longitude: 0,
+    confidence: 0,
+    source: 'none'
   };
 }

@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView from './components/MapView';
+import ProgressBar from './components/ProgressBar';
 import TrendGraphContainer from './components/TrendGraphContainer';
 import SentimentTimelineGraph from './components/SentimentTimelineGraph';
 import TrendGraphView from './components/TrendGraphView';
@@ -38,6 +39,7 @@ interface Article {
   longitude?: number;
   bias?: number; // bias rating from source
   factualReporting?: 'MIXED' | 'HIGH' | 'VERY_HIGH'; // factual reporting rating from source
+  unknownBias?: boolean; // flag for when bias is unknown
   sentiment?: {
     score: number;
     comparative: number;
@@ -88,8 +90,10 @@ export default function App() {
   const [legend, setLegend] = useState<Legend | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
-  const [summary, setSummary] = useState({ total: 0, retractions: 0, corrections: 0, newsArticles: 0, biasedSources: 0, untruthfulSources: 0 });
+  const [helpVisible, setHelpVisible] = useState(false);
+  const [summary, setSummary] = useState({ total: 0, retractions: 0, corrections: 0, newsArticles: 0, biasedSources: 0, neutralBiasSources: 0, untruthfulSources: 0, unknownBiasSources: 0 });
   const [activeTab, setActiveTab] = useState<'map' | 'list' | 'trends' | 'sentiment' | 'bias' | 'truthfulness'>('map');
+  const [filteredCategory, setFilteredCategory] = useState<string | null>(null);
   const [trendPolygons, setTrendPolygons] = useState<TrendPolygon[]>([]);
   const [trendKeyword, setTrendKeyword] = useState('');
   const [trendStats, setTrendStats] = useState<any>(null);
@@ -98,6 +102,10 @@ export default function App() {
   const [trendTimeout, setTrendTimeout] = useState(false);
   const [progressModalVisible, setProgressModalVisible] = useState(false);
   const [progressStep, setProgressStep] = useState('');
+  const [progressSteps, setProgressSteps] = useState<Array<{
+    name: string;
+    status: 'pending' | 'in-progress' | 'completed' | 'error';
+  }>>([]);
   const [analysisComplete, setAnalysisComplete] = useState(false);
   const [trendValueMode, setTrendValueMode] = useState<TrendValueMode>('max');
 
@@ -123,6 +131,54 @@ export default function App() {
   useEffect(() => {
     fetchLegend();
   }, []);
+
+  // Filter articles based on the selected summary category
+  const filteredArticles = useMemo(() => {
+    if (!filteredCategory) {
+      return articles; // No filter, return all
+    }
+
+    // Map filterable summary keys to article properties/statuses
+    switch (filteredCategory) {
+      case 'retractions':
+        return articles.filter(a => a.status === 'retraction');
+      case 'corrections':
+        return articles.filter(a => a.status === 'correction');
+      case 'newsArticles':
+        // 'newsArticles' in summary maps to 'original' status in articles
+        return articles.filter(a => a.status === 'original');
+      case 'biasedSources':
+        // A "biased" article is one with a non-neutral bias rating
+        return articles.filter(a => a.bias !== undefined && (a.bias < -5 || a.bias > 5));
+       case 'neutralBiasSources':
+         // Articles with bias rating between -5 and 5 (and known bias)
+         return articles.filter(a => !a.unknownBias && a.bias !== undefined && a.bias >= -5 && a.bias <= 5);
+       case 'unknownBiasSources':
+         // Articles where bias is unknown
+         return articles.filter(a => a.unknownBias === true);
+      case 'untruthfulSources':
+        // 'untruthful' maps to 'MIXED' factual reporting
+        return articles.filter(a => a.factualReporting === 'MIXED');
+      default:
+        return articles; // Unknown filter, return all
+    }
+  }, [articles, filteredCategory]);
+
+  // Handle toggling the filter
+  const handleFilterSelect = (category: string | null) => {
+    if (category === null) {
+      setFilteredCategory(null); // 'Total' clears filter
+    } else if (filteredCategory === category) {
+      setFilteredCategory(null); // Toggle off if already selected
+    } else {
+      setFilteredCategory(category); // Set new filter
+    }
+  };
+
+  // Style for the active filter button
+  const activeFilterStyle = {
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)',
+  };
 
   const fetchLegend = async () => {
     try {
@@ -435,49 +491,91 @@ export default function App() {
     return { original, negation, bias };
   };
 
+  // Helper to update progress step
+  const updateProgressStep = (stepName: string, status: 'pending' | 'in-progress' | 'completed' | 'error' = 'in-progress') => {
+    setProgressStep(stepName);
+    setProgressSteps(prev => {
+      const existing = prev.find(s => s.name === stepName);
+      if (existing) {
+        return prev.map(s => s.name === stepName ? { ...s, status } : s);
+      }
+      return [...prev, { name: stepName, status }];
+    });
+  };
+
+  // Helper to mark step as completed
+  const completeProgressStep = (stepName: string) => {
+    setProgressSteps(prev =>
+      prev.map(s => s.name === stepName ? { ...s, status: 'completed' } : s)
+    );
+  };
+
   const handleSearch = async () => {
-    setProgressStep('Searching articles...');
+    const allSteps = [
+      'Generating search terms',
+      'Searching original articles',
+      'Searching negation and opposing articles',
+      'Searching biased and hoax articles',
+  'Waiting for server (search + city extraction)',
+      'Fetching article metadata',
+      'Analyzing bias ratings',
+      'Calculating sentiment analysis',
+      'Extracting city locations',
+      'Processing completed'
+    ];
+    
+    setProgressSteps(allSteps.map(name => ({ name, status: 'pending' })));
     setProgressModalVisible(true);
+    updateProgressStep('Generating search terms');
+    
     if (!searchTerm.trim()) return;
 
     setLoading(true);
+    setFilteredCategory(null); // Clear filters on new search
     try {
       // Generate search terms organized by category
+      completeProgressStep('Generating search terms');
+      updateProgressStep('Searching original articles');
       const { original, negation, bias } = generateSearchTerms(searchTerm);
       
       // Make separate API calls for each category to get distinct results
-      setProgressStep('Searching original articles...');
       const originalRes = await fetch(`${API_BASE_URL}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ terms: original, limit: 300 })
       });
       const { search_id: originalId } = await originalRes.json();
+      completeProgressStep('Searching original articles');
 
-      setProgressStep('Searching negation and opposing articles...');
+      updateProgressStep('Searching negation and opposing articles');
       const negationRes = await fetch(`${API_BASE_URL}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ terms: negation, limit: 300 })
       });
       const { search_id: negationId } = await negationRes.json();
+      completeProgressStep('Searching negation and opposing articles');
 
-      setProgressStep('Searching biased and hoax articles...');
+      updateProgressStep('Searching biased and hoax articles');
       const biasRes = await fetch(`${API_BASE_URL}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ terms: bias, limit: 300 })
       });
       const { search_id: biasId } = await biasRes.json();
+      completeProgressStep('Searching biased and hoax articles');
 
       // Poll for all results with exponential backoff
-      setProgressStep('Waiting for search results...');
+  updateProgressStep('Waiting for server (search + city extraction)');
       let allResults: any[] = [];
       
       const pollResults = async (searchId: string, category: string) => {
         let attempts = 0;
-        const maxAttempts = 30;
+        const maxAttempts = 180; // Much higher limit: 180 attempts
         let delay = 500;
+        const maxDelay = 5000; // Increase max delay to 5 seconds for slow processing
+        let lastProgressUpdate = 0;
+        let noProgressAttempts = 0; // Track how many attempts without progress update
 
         while (attempts < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, delay));
@@ -485,18 +583,46 @@ export default function App() {
           
           if (!resultsRes.ok) {
             attempts++;
-            delay = Math.min(delay * 1.2, 2000);
+            delay = Math.min(delay * 1.15, maxDelay); // Gentler exponential backoff
             continue;
           }
 
           const results = await resultsRes.json();
+          // Update progress during city extraction if available
+          if (!results.ready && results.progress && results.progress.total > 0) {
+            const { current, total, phase } = results.progress;
+            const pct = Math.max(0, Math.min(100, Math.round((current / total) * 100)));
+            
+            // Only update if progress actually changed
+            if (current !== lastProgressUpdate) {
+              const categoryLabel = category.charAt(0).toUpperCase() + category.slice(1);
+              const label = phase === 'extracting-cities' 
+                ? `[${categoryLabel}] Extracting: ${current}/${total} articles (${pct}%)` 
+                : `[${categoryLabel}] Processing (${pct}%)`;
+              setProgressStep(label);
+              // Mark the extracting step as in-progress in the list
+              updateProgressStep('Extracting city locations', 'in-progress');
+              lastProgressUpdate = current;
+              noProgressAttempts = 0;
+              delay = 500; // Reset delay when we get progress
+            } else {
+              noProgressAttempts++;
+              // If no progress for many attempts, wait longer but keep trying
+              if (noProgressAttempts > 10) {
+                delay = Math.min(delay * 1.15, maxDelay);
+              }
+            }
+          }
           if (results.ready) {
             return { ...results, category };
           }
           
           attempts++;
-          delay = Math.min(delay * 1.2, 2000);
+          delay = Math.min(delay * 1.15, maxDelay);
         }
+        
+        // Timeout - return partial results if available
+        console.warn(`Timeout polling ${category} results after ${maxAttempts} attempts`);
         return null;
       };
 
@@ -506,8 +632,26 @@ export default function App() {
         pollResults(negationId, 'negation'),
         pollResults(biasId, 'bias')
       ]);
+  completeProgressStep('Waiting for server (search + city extraction)');
+
+      // Check for timeouts and warn the user
+      const timedOutCategories = [];
+      if (!originalResults) timedOutCategories.push('Original search');
+      if (!negationResults) timedOutCategories.push('Negation search');
+      if (!biasResults) timedOutCategories.push('Bias search');
+      
+      if (timedOutCategories.length > 0) {
+        console.warn(`Searches timed out: ${timedOutCategories.join(', ')}`);
+        alert(`⚠️ Timeout: ${timedOutCategories.join(', ')} did not complete in time. Showing available results.`);
+      }
+      
+      // If all searches timed out, show error and stop
+      if (timedOutCategories.length === 3) {
+        throw new Error('All searches timed out. Please try again.');
+      }
 
       // Combine results and tag by category
+      updateProgressStep('Fetching article metadata');
       const allArticles: any[] = [];
       if (originalResults?.geojson?.features) {
         allArticles.push(...originalResults.geojson.features.map((f: any) => ({
@@ -534,9 +678,19 @@ export default function App() {
         })));
       }
 
+      completeProgressStep('Fetching article metadata');
+      updateProgressStep('Analyzing bias ratings');
+
       // Detect contradictions between articles
       const articlesWithAnalysis = detectContradictions(allArticles);
+      
+      completeProgressStep('Analyzing bias ratings');
+      updateProgressStep('Calculating sentiment analysis');
+      
       setArticles(articlesWithAnalysis);
+      
+      completeProgressStep('Calculating sentiment analysis');
+      updateProgressStep('Extracting city locations');
       
       // Combine summaries from all search results
       const combinedSummary = {
@@ -545,23 +699,33 @@ export default function App() {
         corrections: (originalResults?.summary?.corrections || 0) + (negationResults?.summary?.corrections || 0) + (biasResults?.summary?.corrections || 0),
         newsArticles: (originalResults?.summary?.newsArticles || 0) + (negationResults?.summary?.newsArticles || 0) + (biasResults?.summary?.newsArticles || 0),
         biasedSources: (originalResults?.summary?.biasedSources || 0) + (negationResults?.summary?.biasedSources || 0) + (biasResults?.summary?.biasedSources || 0),
-        untruthfulSources: (originalResults?.summary?.untruthfulSources || 0) + (negationResults?.summary?.untruthfulSources || 0) + (biasResults?.summary?.untruthfulSources || 0)
+        untruthfulSources: (originalResults?.summary?.untruthfulSources || 0) + (negationResults?.summary?.untruthfulSources || 0) + (biasResults?.summary?.untruthfulSources || 0),
+        neutralBiasSources: (originalResults?.summary?.neutralBiasSources || 0) + (negationResults?.summary?.neutralBiasSources || 0) + (biasResults?.summary?.neutralBiasSources || 0),
+        unknownBiasSources: (originalResults?.summary?.unknownBiasSources || 0) + (negationResults?.summary?.unknownBiasSources || 0) + (biasResults?.summary?.unknownBiasSources || 0)
       };
       setSummary(combinedSummary);
+      completeProgressStep('Extracting city locations');
 
       // Reset analysis flag - it will be set to true once trends complete
       setAnalysisComplete(false);
 
       // Automatically load and display trends overlay after articles are loaded
       if (searchTerm.trim()) {
-        setProgressStep('Fetching trend data...');
+        completeProgressStep('Processing completed');
+
         await fetchStateTrendPolygons(searchTerm, true);
+        // Close progress modal now that all processing is complete
+        setProgressModalVisible(false);
+        setProgressSteps([]);
       }
   } catch (error) {
       console.error('Search failed:', error);
+      setProgressSteps(prev =>
+        prev.map(s => s.status === 'in-progress' ? { ...s, status: 'error' } : s)
+      );
     } finally {
       setLoading(false);
-      setProgressModalVisible(false);
+      // Do not auto-close the progress modal; it will be closed explicitly after processing completes
       setProgressStep('');
     }
   };
@@ -634,44 +798,9 @@ export default function App() {
     } finally {
       if (!skipLoading) setLoading(false);
     }
-      {/* Progress Modal */}
-      <Modal
-        visible={progressModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setProgressModalVisible(false)}
-      >
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <View style={{ backgroundColor: colors.surface, padding: 24, borderRadius: 12, alignItems: 'center', maxWidth: 320 }}>
-            <Text style={{ color: colors.text, fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>Analyzing Data</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 15, marginBottom: 20, textAlign: 'center' }}>
-              {progressStep || 'Working...'}
-            </Text>
-            <ActivityIndicator color={colors.primary} size="large" />
-          </View>
-        </View>
-      </Modal>
   };
-      {/* Trend Timeout Modal */}
-      <Modal
-        visible={trendTimeout}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setTrendTimeout(false)}
-      >
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <View style={{ backgroundColor: colors.surface, padding: 24, borderRadius: 12, alignItems: 'center', maxWidth: 320 }}>
-            <Text style={{ color: colors.text, fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>Trend Data Timeout</Text>
-            <Text style={{ color: colors.textSecondary, fontSize: 15, marginBottom: 20, textAlign: 'center' }}>
-              The backend is taking too long to respond with trend data. Please try again later or check your server.
-            </Text>
-            <TouchableOpacity onPress={() => setTrendTimeout(false)} style={{ backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}>
-              <Text style={{ color: 'white', fontWeight: '600', fontSize: 15 }}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
+  // Helper functions for status display
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'retraction':
@@ -683,9 +812,9 @@ export default function App() {
       case 'inciting':
         return '#137fec';
       case 'misleading':
-        return '#ec4899'; // Pink/Magenta for misleading
+        return '#ec4899';
       case 'disputed':
-        return '#a78bfa'; // Purple for disputed
+        return '#a78bfa';
       default:
         return '#64748b';
     }
@@ -718,19 +847,244 @@ export default function App() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
 
+      {/* Progress Bar */}
+      <ProgressBar
+        visible={progressModalVisible}
+        steps={progressSteps}
+        currentStep={progressStep}
+        isDark={isDark}
+      />
+
+      {/* Trend Timeout Modal */}
+      <Modal
+        visible={trendTimeout}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTrendTimeout(false)}
+      >
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <View style={{ backgroundColor: colors.surface, padding: 24, borderRadius: 12, alignItems: 'center', maxWidth: 320 }}>
+            <Text style={{ color: colors.text, fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>Trend Data Timeout</Text>
+            <Text style={{ color: colors.textSecondary, fontSize: 15, marginBottom: 20, textAlign: 'center' }}>
+              The backend is taking too long to respond with trend data. Please try again later or check your server.
+            </Text>
+            <TouchableOpacity onPress={() => setTrendTimeout(false)} style={{ backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}>
+              <Text style={{ color: 'white', fontWeight: '600', fontSize: 15 }}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Help Modal */}
+      <Modal
+        visible={helpVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHelpVisible(false)}
+      >
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <View style={{ backgroundColor: colors.surface, padding: 20, borderRadius: 12, maxWidth: 720, width: '90%', maxHeight: '85%' }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>How Town Crier Works</Text>
+              <TouchableOpacity onPress={() => setHelpVisible(false)}>
+                <MaterialCommunityIcons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ marginBottom: 16 }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 14, marginBottom: 16, lineHeight: 20 }}>
+                Town Crier is a news analysis platform that finds, geolocates, and visualizes recent articles with sentiment, bias, truthfulness, and trend information. Here's exactly what happens behind the scenes.
+              </Text>
+
+              {/* Frontend Process */}
+              <View style={{ marginBottom: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <MaterialCommunityIcons name="laptop" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>Frontend Process</Text>
+                </View>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>1. Search Generation (Automatic):</Text> When you search, three parallel queries are auto-generated:
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 40, lineHeight: 19 }}>
+                  • <Text style={{ fontWeight: '600' }}>Original:</Text> Your exact query (e.g., "vaccine"){"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Negation:</Text> Opposite terms (e.g., "vaccine -safe -effective -study"). Captures articles dismissing the topic{"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Bias:</Text> Adds misinformation indicators (e.g., "vaccine hoax fraud misinformation"). Finds questionable reporting
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>2. Parallel Backend Requests:</Text> All three queries are sent to the backend simultaneously, and results are combined and deduplicated.
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>3. Live Progress Display:</Text> A progress panel shows each step: "Fetching articles..." → "Extracting cities..." → "Analyzing sentiment..." → "Done!"
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>4. Results Visualization:</Text> Results render as:
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 40, lineHeight: 19 }}>
+                  • <Text style={{ fontWeight: '600' }}>Map Tab:</Text> Interactive Leaflet map with color-coded location markers{"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Summary Bar:</Text> Quick stats (Total, Retractions, Corrections, Biased, Untruthful){"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Multiple Tabs:</Text> Analyze data by Map, List, Trends, Sentiment, Bias ratings, Truthfulness
+                </Text>
+              </View>
+
+              {/* Backend Process */}
+              <View style={{ marginBottom: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <MaterialCommunityIcons name="server" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>Backend Processing Pipeline</Text>
+                </View>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>1. Article Fetching (Multi-Source):</Text> Uses NewsData.io API + Google News RSS to gather diverse articles. Fetches up to 100 results per query with freshness priority.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>2. Deduplication (Word Overlap):</Text> Filters articles using word overlap comparison on titles. Keeps only articles that share at least 1 word with the combined vocabulary of all results. Removes completely off-topic noise while preserving diverse reporting.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>3. Text Extraction (Fallback Scraping):</Text> If RSS doesn't include full text, Readability library auto-scrapes article content. Ensures comprehensive text for sentiment/claims analysis.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>4. City Extraction (Regex + NLP):</Text> Regex patterns parse URLs and content for location keywords. Matches cities in US states and geo-coordinates them (latitude/longitude). Fallback: Uses article metadata or defaults to unknown location.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>5. Media Bias Lookup (Database Match):</Text> Checks source domain against AllSides & MBFC databases. Returns bias score (-30 to +30, where -30 = extreme left, +30 = extreme right, 0 = center). If source unknown, flags "Unknown" and defaults to neutral (0).
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>6. Article Classification (Heuristics):</Text> Scans content for keywords:
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 40, lineHeight: 19 }}>
+                  • <Text style={{ fontWeight: '600' }}>Retraction:</Text> Keywords: "retract", "withdraw", "false claim" → Official correction{"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Correction:</Text> Keywords: "correct", "clarify", "update" → Factual update{"\n"}
+                  • <Text style={{ fontWeight: '600' }}>News Article:</Text> Default classification{"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Biased Source:</Text> Source bias rating in known database (left/right){"\n"}
+                  • <Text style={{ fontWeight: '600' }}>Untruthful Source:</Text> Source has poor factual rating (MIXED or VERY_HIGH error rate)
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>7. Sentiment Analysis (Sentiment Library):</Text> Analyzes text using the Sentiment library, computing sentiment scores (positive/negative/neutral) and comparative sentiment metrics per sentence. Useful for tracking tone across sources.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>8. GeoJSON Formatting:</Text> All results converted to GeoJSON features with properties (title, source, bias, sentiment, city) for map rendering.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>9. Trends Data (State Polygons):</Text> Separate /api/trends endpoint returns US state boundaries with trend intensity overlay (0-100 scale based on article volume and recency).
+                </Text>
+              </View>
+
+              {/* UI Features Explained */}
+              <View style={{ marginBottom: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <MaterialCommunityIcons name="palette" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>UI Features & Interactions</Text>
+                </View>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>Status Badges (Colors):</Text> Green = Original news, Blue = Retraction, Orange = Correction, Red = Biased/Untruthful. Click legend to filter by status type.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>Map Markers (Size & Opacity):</Text> Size = Article age (larger = older), Opacity = Trend value (brighter = trending). Hover for full tooltip.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>Sentiment Tab:</Text> Displays negative-to-positive scale. Red = very negative, Green = very positive. Useful for understanding tone across sources.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>Bias Tab:</Text> Shows source bias spectrum. Left side = left-leaning, Right side = right-leaning, Center = neutral. Helps identify ideological patterns.
+                </Text>
+
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  <Text style={{ fontWeight: '600' }}>Trends Tab:</Text> Google Trends overlay on map showing real-time search interest peaks. State polygons color by trend intensity.
+                </Text>
+              </View>
+
+              {/* Data Sources */}
+              <View style={{ marginBottom: 18 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <MaterialCommunityIcons name="database" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>Data Sources & APIs</Text>
+                </View>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28 }}>
+                  <Text style={{ fontWeight: '600' }}>Articles:</Text> NewsData.io (primary), Google News RSS (fallback)
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28 }}>
+                  <Text style={{ fontWeight: '600' }}>Bias Database:</Text> AllSides.com + Media Bias/Fact Check (MBFC)
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28 }}>
+                  <Text style={{ fontWeight: '600' }}>Sentiment:</Text> VADER lexicon (built into Python NLP libraries)
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28 }}>
+                  <Text style={{ fontWeight: '600' }}>Trends:</Text> Google Trends API (optional frontend enrichment)
+                </Text>
+              </View>
+
+              {/* Limitations */}
+              <View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                  <MaterialCommunityIcons name="alert-circle" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                  <Text style={{ color: colors.text, fontSize: 16, fontWeight: '700' }}>Limitations & Caveats</Text>
+                </View>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28, lineHeight: 19 }}>
+                  • Bias ratings based on curated datasets; not every source is in the database
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28, lineHeight: 19 }}>
+                  • Unknown bias sources are flagged separately and default to "Neutral"
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28, lineHeight: 19 }}>
+                  • City extraction is best-effort (regex-based); may be approximate or miss some locations
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 4, marginLeft: 28, lineHeight: 19 }}>
+                  • Sentiment analysis is statistical; context-dependent sarcasm may be misclassified
+                </Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8, marginLeft: 28, lineHeight: 19 }}>
+                  • Results are from last 7 days of articles; older stories not included
+                </Text>
+              </View>
+
+              <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border }}>
+                <Text style={{ fontWeight: '600' }}>Tip:</Text> Use the negation search variant to find counter-arguments. Compare source bias vs. sentiment to spot possible propaganda. Check Trends tab to see public interest patterns.
+              </Text>
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }}>
+              <TouchableOpacity onPress={() => setHelpVisible(false)} style={{ backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 }}>
+                <Text style={{ color: 'white', fontWeight: '600', fontSize: 14 }}>Got it</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
         <Text style={[styles.title, { color: colors.text }]}>Town Crier</Text>
-        <TouchableOpacity
-          onPress={() => setIsDark(!isDark)}
-          style={[styles.themeToggle, { backgroundColor: colors.primary }]}
-        >
-          <MaterialCommunityIcons
-            name={isDark ? 'white-balance-sunny' : 'moon-waning-crescent'}
-            size={20}
-            color="white"
-          />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            onPress={() => setHelpVisible(true)}
+            accessibilityLabel="Show help"
+            style={[styles.themeToggle, { backgroundColor: colors.primary }]}
+          >
+            <MaterialCommunityIcons name="help-circle-outline" size={20} color="white" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setIsDark(!isDark)}
+            accessibilityLabel="Toggle theme"
+            style={[styles.themeToggle, { backgroundColor: colors.primary }]}
+          >
+            <MaterialCommunityIcons
+              name={isDark ? 'white-balance-sunny' : 'moon-waning-crescent'}
+              size={20}
+              color="white"
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Search Bar */}
@@ -780,30 +1134,66 @@ export default function App() {
           style={[styles.summaryLegendContainer, { backgroundColor: colors.surface, borderColor: colors.border }]}
           showsHorizontalScrollIndicator={false}
         >
-          <View style={styles.summaryLegendItem}>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              !filteredCategory && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect(null)}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>Total:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#137fec' }]}>{summary.total}</Text>
-          </View>
-          <View style={styles.summaryLegendItem}>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              filteredCategory === 'retractions' && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect('retractions')}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>Retractions:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#ef4444' }]}>{summary.retractions}</Text>
-          </View>
-          <View style={styles.summaryLegendItem}>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              filteredCategory === 'corrections' && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect('corrections')}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>Corrections:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#f59e0b' }]}>{summary.corrections}</Text>
-          </View>
-          <View style={styles.summaryLegendItem}>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              filteredCategory === 'newsArticles' && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect('newsArticles')}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>News Articles:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#22c55e' }]}>{summary.newsArticles}</Text>
-          </View>
-          <View style={styles.summaryLegendItem}>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              filteredCategory === 'biasedSources' && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect('biasedSources')}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>Biased Sources:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#8b5cf6' }]}>{summary.biasedSources}</Text>
-          </View>
-          <View style={styles.summaryLegendItem}>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.summaryLegendItem,
+              filteredCategory === 'untruthfulSources' && activeFilterStyle
+            ]}
+            onPress={() => handleFilterSelect('untruthfulSources')}
+          >
             <Text style={[styles.summaryLegendLabel, { color: colors.textSecondary }]}>Untruthful Sources:</Text>
             <Text style={[styles.summaryLegendValue, { color: '#d946ef' }]}>{summary.untruthfulSources}</Text>
-          </View>
+          </TouchableOpacity>
         </ScrollView>
       )}
 
@@ -834,7 +1224,7 @@ export default function App() {
             ]}
           >
             <MaterialCommunityIcons 
-              name="list" 
+              name="format-list-bulleted" 
               size={20} 
               color={activeTab === 'list' ? colors.primary : colors.textSecondary}
             />
@@ -923,7 +1313,7 @@ export default function App() {
             isDark={isDark}
           />
           <MapView
-            markers={articles.map(article => {
+            markers={filteredArticles.map(article => {
               // Find trend value at article publish date
               const articleDate = new Date(article.publishDate).toISOString().slice(0, 10);
               const trendAtPublish = trendTimeSeries.find(t => t.date === articleDate);
@@ -956,7 +1346,10 @@ export default function App() {
                 sentimentLabel: sentimentLabel,
                 trendValue: trendValue,
                 trendTerms: trendTerms,
-                publishDate: articleDate
+                 publishDate: articleDate,
+                 bias: article.bias,
+                 factualReporting: article.factualReporting,
+                 unknownBias: article.unknownBias
               };
             })}
             trendPolygons={[]}
@@ -982,7 +1375,7 @@ export default function App() {
       {/* Articles List */}
       {activeTab === 'list' && (
         <FlatList
-          data={articles}
+          data={filteredArticles}
           keyExtractor={(item: any) => item.id}
           renderItem={({ item }: { item: any }) => (
             <TouchableOpacity
@@ -1028,12 +1421,12 @@ export default function App() {
         <ScrollView style={{ flex: 1, backgroundColor: colors.background }}>
           <View style={{ padding: 16 }}>
             <SentimentGraphView
-              sentimentPoints={useMemo(() => articles.map(a => ({
+              sentimentPoints={useMemo(() => filteredArticles.map(a => ({
                 date: new Date(a.publishDate).toLocaleDateString(),
                 score: a.sentiment?.score ?? 0,
                 source: a.source || '',
                 keywordSentiment: extractArticleKeywords([a])[0]?.sentiment ?? 0
-              })), [articles])}
+              })), [filteredArticles])}
             />
           </View>
         </ScrollView>
@@ -1046,7 +1439,7 @@ export default function App() {
             <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 16 }]}>
               Source Bias Ratings
             </Text>
-            {articles.map((article, index) => {
+            {filteredArticles.map((article, index) => {
               // Get bias from article (would need to be added to Article interface from backend)
               const bias = (article as any).bias !== undefined ? (article as any).bias : null;
               const biasLabel = bias === null ? 'Unknown' : bias < -5 ? 'Left-leaning' : bias > 5 ? 'Right-leaning' : 'Neutral';
@@ -1081,7 +1474,7 @@ export default function App() {
             <Text style={[styles.sectionTitle, { color: colors.text, marginBottom: 16 }]}>
               Source Factual Reporting Ratings
             </Text>
-            {articles.map((article, index) => {
+            {filteredArticles.map((article, index) => {
               const factualReporting = (article as any).factualReporting || 'Unknown';
               const truthColor = factualReporting === 'VERY_HIGH' ? '#10b981' : factualReporting === 'HIGH' ? '#3b82f6' : factualReporting === 'MIXED' ? '#f59e0b' : '#9ca3af';
               const truthLabel = factualReporting === 'VERY_HIGH' ? 'Very High' : factualReporting === 'HIGH' ? 'High' : factualReporting === 'MIXED' ? 'Mixed' : 'Unknown';
@@ -1280,8 +1673,11 @@ const styles = StyleSheet.create({
   summaryLegendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: 8,
-    gap: 4
+    marginHorizontal: 4,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6
   },
   summaryLegendLabel: {
     fontSize: 11,
@@ -1529,6 +1925,10 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '500',
     marginTop: 4
+  },
+  // Added for section titles in tabs
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '600'
   }
 });
-

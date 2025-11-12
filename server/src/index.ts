@@ -57,6 +57,11 @@ interface SearchResult {
     misdirectedContent: number;
     topSignals: Array<[string, number]>;
   };
+  progress?: {
+    phase: string;
+    current: number;
+    total: number;
+  };
 }
 
 interface GeoJSONFeature {
@@ -172,6 +177,17 @@ app.post('/api/search', async (req, res) => {
   // Process in background
   (async () => {
     try {
+      // Initialize search record to allow progress polling immediately
+      activeSearches[id] = {
+        id,
+        terms,
+        createdAt: new Date().toISOString(),
+        status: 'processing',
+        geojson: { type: 'FeatureCollection', features: [] },
+        summary: { total: 0, retractions: 0, corrections: 0, originals: 0, inciting: 0 },
+        progress: { phase: 'starting', current: 0, total: 0 }
+      };
+
       let articles = await hybridFetcher.fetchArticles(terms, { limit, sources: searchSources });
       
       // Filter articles by word overlap with combined vocabulary
@@ -192,7 +208,9 @@ app.post('/api/search', async (req, res) => {
         corrections: 0, 
         newsArticles: 0,
         biasedSources: 0,
-        untruthfulSources: 0
+        untruthfulSources: 0,
+        neutralBiasSources: 0,
+        unknownBiasSources: 0
       };
       const classifications: any[] = [];
       const sentiment = new Sentiment();
@@ -213,91 +231,173 @@ app.post('/api/search', async (req, res) => {
         })
       );
 
+      // Initialize progress for city extraction
+      activeSearches[id].progress = {
+        phase: 'extracting-cities',
+        current: 0,
+        total: articlesWithContent.length
+      };
+
       // Initialize media bias lookup
       await mediaBiasLookup.initialize();
 
-      // Track first article time per location for size encoding
+      // Track first article time Initper location for size encoding
       const locationFirstArticleTime: Map<string, number> = new Map();
 
       // Process each article with bias lookup
       for (let i = 0; i < articlesWithContent.length; i++) {
-        const article = articlesWithContent[i];
-        const city = extractCity(`${article.title} ${article.description}`, i, article.source, article.title);
-        
-        // Look up media bias and factual reporting ratings first
-        // Try by source name first (works better for Google News), then by URL
-        const biasRating = await mediaBiasLookup.lookupSource(
-          article.sourceUrl || article.link,
-          article.source // Pass source name as second parameter
-        );
-        
-        // Classify with bias and factual reporting data
-        const statusClassification = classifyStatus(
-          `${article.title} ${article.description}`,
-          article.content,
-          biasRating?.biasRating,
-          biasRating?.factualReportingRating
-        );
-        classifications.push(statusClassification);
-
-        // Sentiment analysis on title + description + content (now with scraped content if available)
-        const text = [article.title, article.description, article.content].filter(Boolean).join(' ');
-        const sentimentResult = sentiment.analyze(text);
-        sentimentScores.push({
-          id: article.id,
-          score: sentimentResult.score,
-          comparative: sentimentResult.comparative
-        });
-
-        // Calculate valence from sentiment (normalized to -1 to 1)
-        const valence = Math.max(-1, Math.min(1, sentimentResult.comparative * 2));
-
-        // Track first article timestamp at this location
-        const locationKey = `${city.latitude},${city.longitude}`;
-        const publishTime = new Date(article.publishDate).getTime();
-        if (!locationFirstArticleTime.has(locationKey)) {
-          locationFirstArticleTime.set(locationKey, publishTime);
-        }
-
-        features.push({
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            coordinates: [city.longitude, city.latitude]
-          },
-          properties: {
-            id: article.id,
-            title: article.title,
-            author: article.author,
-            source: article.source,
-            publishDate: article.publishDate,
-            link: article.link,
-            description: article.description,
-            status: statusClassification.status,
-            statusConfidence: statusClassification.confidence,
-            statusReason: statusClassification.reason,
-            detectedSignals: statusClassification.signals || [],
-            city: city.name,
-            confidence: city.confidence,
-            sentiment: {
-              score: sentimentResult.score,
-              comparative: sentimentResult.comparative
-            },
-            sentimentLabel: sentimentResult.score > 0 ? 'positive' : sentimentResult.score < 0 ? 'negative' : 'neutral',
-            valence: valence,
-            category: statusClassification.status,
-            bias: biasRating?.biasRating || undefined,
-            factualReporting: biasRating?.factualReportingRating || undefined,
-            firstArticleTime: locationFirstArticleTime.get(locationKey)
+        try {
+          const article = articlesWithContent[i];
+          
+          let city;
+          try {
+            city = await extractCity(`${article.title} ${article.description}`, i, article.source, article.title, article.link);
+          } catch (cityError) {
+            console.error(`[Article ${i + 1}/${articlesWithContent.length}] City extraction error:`, cityError);
+            // Use fallback location on error
+            city = {
+              name: 'Unknown',
+              latitude: 0,
+              longitude: 0,
+              confidence: 0,
+              source: 'error'
+            };
           }
-        });
 
-        summaryStats.total++;
-        if (statusClassification.status === 'retraction') summaryStats.retractions++;
-        else if (statusClassification.status === 'correction') summaryStats.corrections++;
-        else if (statusClassification.status === 'news-article') summaryStats.newsArticles++;
-        else if (statusClassification.status === 'biased-source') summaryStats.biasedSources++;
-        else if (statusClassification.status === 'untruthful-source') summaryStats.untruthfulSources++;
+          console.log(`[Article ${i + 1}/${articlesWithContent.length}] "${article.source}" - Extracted city: ${city.name} (${city.latitude}, ${city.longitude})`);
+
+          // if no city or coordinates, skip article
+          if (!city || !city.latitude || !city.longitude) {
+            // Update progress even for skipped articles
+            activeSearches[id].progress = {
+              phase: 'extracting-cities',
+              current: i + 1,
+              total: articlesWithContent.length
+            };
+            continue;
+          }
+
+          // Look up media bias and factual reporting ratings first
+          // Try by source name first (works better for Google News), then by URL
+          let biasRating;
+          try {
+            biasRating = await mediaBiasLookup.lookupSource(
+              article.sourceUrl || article.link,
+              article.source // Pass source name as second parameter
+            );
+          } catch (biasError) {
+            console.error(`[Article ${i + 1}/${articlesWithContent.length}] Media bias lookup error:`, biasError);
+            biasRating = { biasRating: undefined, factualReportingRating: undefined };
+          }
+          
+          // If bias is unknown, set it to neutral (0)
+          const bias = biasRating?.biasRating !== undefined ? biasRating.biasRating : 0;
+          const isUnknownBias = biasRating?.biasRating === undefined;
+          
+          // Classify with bias and factual reporting data
+          let statusClassification;
+          try {
+            statusClassification = classifyStatus(
+              `${article.title} ${article.description}`,
+              article.content,
+              bias,
+              biasRating?.factualReportingRating
+            );
+          } catch (classifyError) {
+            console.error(`[Article ${i + 1}/${articlesWithContent.length}] Status classification error:`, classifyError);
+            statusClassification = { status: 'news-article', confidence: 0, reason: 'classification-error', signals: [] };
+          }
+          classifications.push(statusClassification);
+
+          // Sentiment analysis on title + description + content (now with scraped content if available)
+          let sentimentResult;
+          try {
+            const text = [article.title, article.description, article.content].filter(Boolean).join(' ');
+            sentimentResult = sentiment.analyze(text);
+          } catch (sentimentError) {
+            console.error(`[Article ${i + 1}/${articlesWithContent.length}] Sentiment analysis error:`, sentimentError);
+            sentimentResult = { score: 0, comparative: 0 };
+          }
+          sentimentScores.push({
+            id: article.id,
+            score: sentimentResult.score,
+            comparative: sentimentResult.comparative
+          });
+
+          // Calculate valence from sentiment (normalized to -1 to 1)
+          const valence = Math.max(-1, Math.min(1, sentimentResult.comparative * 2));
+
+          // Track first article timestamp at this location
+          const locationKey = `${city.latitude},${city.longitude}`;
+          const publishTime = new Date(article.publishDate).getTime();
+          if (!locationFirstArticleTime.has(locationKey)) {
+            locationFirstArticleTime.set(locationKey, publishTime);
+          }
+
+          features.push({
+            type: 'Feature',
+            geometry: {
+              type: 'Point',
+              coordinates: [city.longitude, city.latitude]
+            },
+            properties: {
+              id: article.id,
+              title: article.title,
+              author: article.author,
+              source: article.source,
+              publishDate: article.publishDate,
+              link: article.link,
+              description: article.description,
+              status: statusClassification.status,
+              statusConfidence: statusClassification.confidence,
+              statusReason: statusClassification.reason,
+              detectedSignals: statusClassification.signals || [],
+              city: city.name,
+              confidence: city.confidence,
+              sentiment: {
+                score: sentimentResult.score,
+                comparative: sentimentResult.comparative
+              },
+              sentimentLabel: sentimentResult.score > 0 ? 'positive' : sentimentResult.score < 0 ? 'negative' : 'neutral',
+              valence: valence,
+              category: statusClassification.status,
+              bias: bias,
+              factualReporting: biasRating?.factualReportingRating || undefined,
+              unknownBias: isUnknownBias,
+              firstArticleTime: locationFirstArticleTime.get(locationKey)
+            }
+          });
+
+          summaryStats.total++;
+          if (statusClassification.status === 'retraction') summaryStats.retractions++;
+          else if (statusClassification.status === 'correction') summaryStats.corrections++;
+          else if (statusClassification.status === 'news-article') summaryStats.newsArticles++;
+          else if (statusClassification.status === 'biased-source') summaryStats.biasedSources++;
+          else if (statusClassification.status === 'untruthful-source') summaryStats.untruthfulSources++;
+          
+          // Track unknown bias sources
+          if (isUnknownBias) {
+            summaryStats.unknownBiasSources = (summaryStats.unknownBiasSources || 0) + 1;
+          } else if (bias >= -5 && bias <= 5) {
+            // Track neutral bias sources (within -5 to 5 range)
+            summaryStats.neutralBiasSources = (summaryStats.neutralBiasSources || 0) + 1;
+          }
+
+          // Update progress
+          activeSearches[id].progress = {
+            phase: 'extracting-cities',
+            current: i + 1,
+            total: articlesWithContent.length
+          };
+        } catch (articleError) {
+          console.error(`[Article ${i + 1}/${articlesWithContent.length}] Unexpected error processing article:`, articleError);
+          // Update progress and continue to next article
+          activeSearches[id].progress = {
+            phase: 'extracting-cities',
+            current: i + 1,
+            total: articlesWithContent.length
+          };
+        }
       }
 
       const geojson = {
@@ -321,7 +421,8 @@ app.post('/api/search', async (req, res) => {
           misdirectedContent: misinfoMetrics.misdirectedContent,
           topSignals: Array.from(misinfoMetrics.topSignals.entries())
         },
-        sentimentScores
+        sentimentScores,
+        progress: { phase: 'complete', current: (activeSearches[id].progress?.total || 0), total: (activeSearches[id].progress?.total || 0) }
       };
     } catch (error) {
       console.error('Search error:', error);
@@ -331,7 +432,8 @@ app.post('/api/search', async (req, res) => {
         createdAt: new Date().toISOString(),
         status: 'complete',
         geojson: { type: 'FeatureCollection', features: [] },
-        summary: { total: 0, retractions: 0, corrections: 0, originals: 0, inciting: 0, disputed: 0, misleading: 0 }
+        summary: { total: 0, retractions: 0, corrections: 0, originals: 0, inciting: 0, disputed: 0, misleading: 0 },
+        progress: { phase: 'error', current: 0, total: 0 }
       };
     }
   })();
@@ -347,7 +449,8 @@ app.get('/api/search/:id/results', (req, res) => {
     ready: sr.status === 'complete',
     geojson: sr.geojson || { type: 'FeatureCollection', features: [] },
     summary: sr.summary || { total: 0, retractions: 0, corrections: 0, originals: 0, inciting: 0, disputed: 0, misleading: 0 },
-    misinformationMetrics: sr.misinformationMetrics
+    misinformationMetrics: sr.misinformationMetrics,
+    progress: sr.progress || { phase: 'unknown', current: 0, total: 0 }
   });
 });
 
@@ -569,6 +672,15 @@ app.get('/api/trends/:keyword', async (req, res) => {
 });
 
 const port = process.env.PORT || 3001;
+
+
 app.listen(port, () => {
   console.log(`server listening on :${port}`);
+});
+
+
+// NEW: Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('Server shutting down...');
+  process.exit(0);
 });

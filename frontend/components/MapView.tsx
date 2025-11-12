@@ -21,6 +21,7 @@ interface MapMarker {
   category?: 'retraction' | 'correction' | 'news-article' | 'biased-source' | 'untruthful-source';
   bias?: number; // bias rating from CSV (-30 to 30)
   factualReporting?: 'MIXED' | 'HIGH' | 'VERY_HIGH'; // factual reporting rating
+   unknownBias?: boolean; // flag for when bias is unknown
   firstArticleTime?: number; // timestamp of first article at this location
 }
 
@@ -160,24 +161,24 @@ export default function MapView({ markers, trendPolygons = [], onMarkerPress, is
             <div class="legend-section">
               <div class="legend-title">Border Color (Category)</div>
               <div class="trend-legend-item">
-                <div class="trend-legend-color" style="background-color: #d32f2f; border: 2px solid #d32f2f;"></div>
+                <div class="trend-legend-color" style="background-color: #ef4444; border: 2px solid #ef4444;"></div>
                 <span>Retraction</span>
               </div>
               <div class="trend-legend-item">
-                <div class="trend-legend-color" style="background-color: #f57c00; border: 2px solid #f57c00;"></div>
+                <div class="trend-legend-color" style="background-color: #f59e0b; border: 2px solid #f59e0b;"></div>
                 <span>Correction</span>
               </div>
               <div class="trend-legend-item">
-                <div class="trend-legend-color" style="background-color: #1976d2; border: 2px solid #1976d2;"></div>
-                <span>Original</span>
+                <div class="trend-legend-color" style="background-color: #22c55e; border: 2px solid #22c55e;"></div>
+                <span>News Article</span>
               </div>
               <div class="trend-legend-item">
-                <div class="trend-legend-color" style="background-color: #f9a825; border: 2px solid #f9a825;"></div>
-                <span>Disputed</span>
+                <div class="trend-legend-color" style="background-color: #8b5cf6; border: 2px solid #8b5cf6;"></div>
+                <span>Biased Source</span>
               </div>
               <div class="trend-legend-item">
-                <div class="trend-legend-color" style="background-color: #7b1fa2; border: 2px solid #7b1fa2;"></div>
-                <span>Misleading</span>
+                <div class="trend-legend-color" style="background-color: #d946ef; border: 2px solid #d946ef;"></div>
+                <span>Untruthful Source</span>
               </div>
             </div>
             <div class="legend-section">
@@ -293,7 +294,9 @@ export default function MapView({ markers, trendPolygons = [], onMarkerPress, is
     const maxDays = 30;
     const scale = Math.max(2.5, 25 - (Math.min(daysDiff, maxDays) / maxDays) * 22.5);
     return scale;
-  }              // Group markers by location for spiral pattern
+  }
+
+  // Group markers by location for spiral pattern
               const locationMap = {};
               markers.forEach((marker, idx) => {
                 const key = marker.latitude + ',' + marker.longitude;
@@ -365,11 +368,20 @@ export default function MapView({ markers, trendPolygons = [], onMarkerPress, is
                 // Build sentiment text
                 const sentimentText = marker.sentiment ? 'Sentiment: ' + marker.sentimentLabel + ' (' + marker.sentiment.score.toFixed(2) + ')' : 'Sentiment: Unknown';
 
+                 // Build bias text
+                 let biasText = 'Unknown (Neutral)';
+                 if (marker.unknownBias) {
+                   biasText = 'Unknown (Neutral)';
+                 } else if (marker.bias !== undefined) {
+                   const biasDirection = marker.bias < -5 ? 'Left' : marker.bias > 5 ? 'Right' : 'Center';
+                   biasText = marker.bias + ' (' + biasDirection + ')';
+                 }
+
                 // Build encoding details HTML
                 const encodingHTML = '<br/><strong>Visual Encoding:</strong><br/>' +
                   'Valence: ' + (marker.valence ? marker.valence.toFixed(2) : 'Unknown') + '<br/>' +
                   'Category: ' + (marker.category || marker.status) + '<br/>' +
-                  'Bias: ' + (marker.bias !== undefined ? marker.bias : 'Unknown') + '<br/>' +
+                   'Bias: ' + biasText + '<br/>' +
                   'Factual Reporting: ' + (marker.factualReporting || 'Unknown');
 
                 // Build tooltip content
@@ -589,35 +601,78 @@ export default function MapView({ markers, trendPolygons = [], onMarkerPress, is
                 const startDateStr = startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 const endDateStr = endDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
                 
-                // Add playback controls to HTML
-              const controlsHTML = `
-                <div id="timeline-controls" style="position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; background: rgba(255,255,255,0.95); padding: 15px 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-family: system-ui, sans-serif;">
-                  <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 10px;">
-                    <button id="timeline-play-btn" onclick="window.toggleTimelinePlayback && window.toggleTimelinePlayback()" style="padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap;">▶ Play Timeline</button>
-                    <span id="timeline-time" style="font-size: 12px; color: #666; white-space: nowrap; min-width: 80px; font-weight: 600;">0:00</span>
-                  </div>
-                  <div style="position: relative; margin-bottom: 8px;">
-                    <input id="timeline-slider" type="range" min="0" max="100" value="0" style="width: 100%; min-width: 300px; height: 8px; border-radius: 4px; outline: none; -webkit-appearance: slider-horizontal; appearance: slider-horizontal; cursor: pointer; padding: 0; margin: 0;" />
-                    <div style="position: absolute; top: -24px; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px; color: #999; pointer-events: none;">
-                      <span>${startDateStr}</span>
-                      <span>${endDateStr}</span>
-                    </div>
-                    <div style="position: absolute; top: 12px; left: 0; right: 0; height: 12px; display: flex; pointer-events: none;">
-                      ${compressedPositions.map((pos, i) => {
-                        return `<div style="position: absolute; left: ${pos}%; width: 2px; height: 10px; background: #3b82f6; opacity: 0.8; transform: translateX(-50%);"></div>`;
-                      }).join('')}
-                    </div>
-                  </div>
-                  <div style="font-size: 11px; color: #999; text-align: center; margin-top: 4px;">
-                    ${uniqueDatesWithTimes.length} article dates | ${sortedMarkers.length} total articles
-                  </div>
-                </div>
-              `;
-              document.body.insertAdjacentHTML('beforeend', controlsHTML);
+                // Create timeline controls using DOM manipulation
+                const controlsContainer = document.createElement('div');
+                controlsContainer.id = 'timeline-controls';
+                controlsContainer.style.cssText = 'position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; background: rgba(255,255,255,0.95); padding: 15px 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.2); font-family: system-ui, sans-serif;';
+                
+                // Button and time display row
+                const controlsRow = document.createElement('div');
+                controlsRow.style.cssText = 'display: flex; align-items: center; gap: 15px; margin-bottom: 10px;';
+                
+                const playBtn = document.createElement('button');
+                playBtn.id = 'timeline-play-btn';
+                playBtn.textContent = '▶ Play Timeline';
+                playBtn.style.cssText = 'padding: 8px 16px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap;';
+                playBtn.addEventListener('click', toggleTimelinePlayback);
+                
+                const timeDisplay = document.createElement('span');
+                timeDisplay.id = 'timeline-time';
+                timeDisplay.textContent = '0:00';
+                timeDisplay.style.cssText = 'font-size: 12px; color: #666; white-space: nowrap; min-width: 80px; font-weight: 600;';
+                
+                controlsRow.appendChild(playBtn);
+                controlsRow.appendChild(timeDisplay);
+                controlsContainer.appendChild(controlsRow);
+                
+                // Slider container with date labels and markers
+                const sliderContainer = document.createElement('div');
+                sliderContainer.style.cssText = 'position: relative; margin-bottom: 8px;';
+                
+                const slider = document.createElement('input');
+                slider.id = 'timeline-slider';
+                slider.type = 'range';
+                slider.min = '0';
+                slider.max = '100';
+                slider.value = '0';
+                slider.style.cssText = 'width: 100%; min-width: 300px; height: 8px; border-radius: 4px; outline: none; -webkit-appearance: slider-horizontal; appearance: slider-horizontal; cursor: pointer; padding: 0; margin: 0;';
+                
+                const dateLabels = document.createElement('div');
+                dateLabels.style.cssText = 'position: absolute; top: -24px; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 11px; color: #999; pointer-events: none;';
+                
+                const startLabel = document.createElement('span');
+                startLabel.textContent = startDateStr;
+                
+                const endLabel = document.createElement('span');
+                endLabel.textContent = endDateStr;
+                
+                dateLabels.appendChild(startLabel);
+                dateLabels.appendChild(endLabel);
+                
+                // Compressed position markers
+                const markerRow = document.createElement('div');
+                markerRow.style.cssText = 'position: absolute; top: 12px; left: 0; right: 0; height: 12px; display: flex; pointer-events: none;';
+                
+                compressedPositions.forEach((pos) => {
+                  const marker = document.createElement('div');
+                  marker.style.cssText = \`position: absolute; left: \${pos}%; width: 2px; height: 10px; background: #3b82f6; opacity: 0.8; transform: translateX(-50%);\`;
+                  markerRow.appendChild(marker);
+                });
+                
+                sliderContainer.appendChild(dateLabels);
+                sliderContainer.appendChild(slider);
+                sliderContainer.appendChild(markerRow);
+                controlsContainer.appendChild(sliderContainer);
+                
+                // Info text
+                const infoText = document.createElement('div');
+                infoText.style.cssText = 'font-size: 11px; color: #999; text-align: center; margin-top: 4px;';
+                infoText.textContent = \`\${uniqueDatesWithTimes.length} article dates | \${sortedMarkers.length} total articles\`;
+                controlsContainer.appendChild(infoText);
+                
+                document.body.appendChild(controlsContainer);
               
-              // Handle slider interaction
-              const slider = document.getElementById('timeline-slider');
-              if (slider) {
+                // Handle slider interaction
                 slider.addEventListener('mousedown', () => {
                   isScrubbing = true;
                 });
@@ -644,15 +699,13 @@ export default function MapView({ markers, trendPolygons = [], onMarkerPress, is
                   });
                   
                   // Update time display with date or elapsed time
-                  const timeDisplay = document.getElementById('timeline-time');
                   if (timeDisplay && closestArticleDate) {
                     const dateStr = closestArticleDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
                     timeDisplay.textContent = dateStr;
                   }
                 });
-              }
               
-              window.toggleTimelinePlayback = toggleTimelinePlayback;
+                window.toggleTimelinePlayback = toggleTimelinePlayback;
               } // End of sortedMarkers.length > 0 condition
 
               
