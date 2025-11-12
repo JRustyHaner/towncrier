@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+    image: jrustyhaner/towncrier-server:latest
+    restart: always
+    expose:
+      - 3001
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - NEWSDATA_API_KEY=${NEWSDATA_API_KEY}
+      - DATAFORSEO_API_KEY=${DATAFORSEO_API_KEY}
+      - DATAFORSEO_API_SECRET=${DATAFORSEO_API_SECRET}
+    networks:
+      - nginx_default
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    image: jrustyhaner/towncrier-frontend:latest
+    restart: always
+    expose:
+      - 8081
+    environment:
+      - EXPO_PUBLIC_API_URL=http://server:3001
+      - NODE_ENV=production
+    networks:
+      - nginx_default
+    depends_on:
+      server:
+        condition: service_healthy
+
+networks:
+  nginx_default:
+    external: true

@@ -164,6 +164,25 @@ export default function App() {
     }
   }, [articles, filteredCategory]);
 
+  // Memoize trend data calculations (must be at top level, not inside conditional JSX)
+  const trendLabels = useMemo(
+    () =>
+      trendTimeSeries.length > 0
+        ? trendTimeSeries.map((p) => p.date)
+        : trendMultiplePhrasesData[0]?.data.map((p) => p.date) || [],
+    [trendTimeSeries, trendMultiplePhrasesData]
+  );
+
+  const trendData = useMemo(
+    () =>
+      trendTimeSeries.length > 0
+        ? trendTimeSeries.map((p) => p.value)
+        : trendMultiplePhrasesData[0]?.data.map((p) => p.value) || [],
+    [trendTimeSeries, trendMultiplePhrasesData]
+  );
+
+  // sentimentPoints will be defined after extractArticleKeywords function
+
   // Handle toggling the filter
   const handleFilterSelect = (category: string | null) => {
     if (category === null) {
@@ -339,6 +358,19 @@ export default function App() {
       return updatedArticle;
     });
   };
+
+  // Memoize sentiment data calculations (must be at top level, not inside conditional JSX)
+  // Defined here after extractArticleKeywords function
+  const sentimentPoints = useMemo(
+    () =>
+      filteredArticles.map((a) => ({
+        date: new Date(a.publishDate).toLocaleDateString(),
+        score: a.sentiment?.score ?? 0,
+        source: a.source || '',
+        keywordSentiment: extractArticleKeywords([a])[0]?.sentiment ?? 0,
+      })),
+    [filteredArticles]
+  );
 
   const extractNounAdjectivePhrases = (text: string): string[] => {
     // Convert to lowercase and split into words
@@ -1408,8 +1440,8 @@ export default function App() {
         <ScrollView style={{ flex: 1, backgroundColor: colors.background }}>
           <View style={{ padding: 16 }}>
             <TrendGraphView
-              trendLabels={useMemo(() => trendTimeSeries.length > 0 ? trendTimeSeries.map(p => p.date) : (trendMultiplePhrasesData[0]?.data.map(p => p.date) || []), [trendTimeSeries, trendMultiplePhrasesData])}
-              trendData={useMemo(() => trendTimeSeries.length > 0 ? trendTimeSeries.map(p => p.value) : (trendMultiplePhrasesData[0]?.data.map(p => p.value) || []), [trendTimeSeries, trendMultiplePhrasesData])}
+              trendLabels={trendLabels}
+              trendData={trendData}
               multiPhraseTrendData={trendMultiplePhrasesData}
             />
           </View>
@@ -1421,12 +1453,7 @@ export default function App() {
         <ScrollView style={{ flex: 1, backgroundColor: colors.background }}>
           <View style={{ padding: 16 }}>
             <SentimentGraphView
-              sentimentPoints={useMemo(() => filteredArticles.map(a => ({
-                date: new Date(a.publishDate).toLocaleDateString(),
-                score: a.sentiment?.score ?? 0,
-                source: a.source || '',
-                keywordSentiment: extractArticleKeywords([a])[0]?.sentiment ?? 0
-              })), [filteredArticles])}
+              sentimentPoints={sentimentPoints}
             />
           </View>
         </ScrollView>

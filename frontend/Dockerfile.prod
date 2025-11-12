@@ -1,0 +1,27 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+
+RUN npm install --legacy-peer-deps
+
+COPY . .
+
+# Runtime stage (use builder as base since we need node for serve)
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install lightweight web server
+RUN npm install -g serve
+
+# Copy dependencies and app from builder
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app /app
+
+EXPOSE 8081
+
+# Start Expo web server in production mode
+CMD ["npx", "expo", "start", "--web", "--non-interactive"]

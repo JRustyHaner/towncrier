@@ -194,7 +194,7 @@ const sourceLocationMapping: Record<string, ExtractedCity> = {
     latitude: 33.7490,
     longitude: -84.3880,
     confidence: 0.98,
-    source: 'source'mailing address of news sources json
+    source: 'source'
   },
 };
 
@@ -278,6 +278,34 @@ export async function extractCity(
     catch (e) {
       // Outer error handler - should not happen but safety net
       console.log(`  [URL extraction outer error] Continuing with other extraction methods...`);
+    }
+  }
+
+  // Fall back to another method: searching google for "city near [source]"
+  if (source) {
+    try {
+      console.log(`Extracting city from Google search for source: ${source}`);
+      const query = encodeURIComponent(`city near ${source}`);
+      const googleSearchUrl = `https://www.google.com/search?q=${query}`;
+      
+      const response = await fetch(googleSearchUrl);
+      const searchText = await response.text();
+      const lowerSearchText = searchText.toLowerCase();
+      
+      // Search for city mentions in the google search result text
+      for (const [cityKeyword, cityData] of Object.entries(usCitiesDatabase)) {
+        if (lowerSearchText.includes(cityKeyword)) {
+          return {
+            name: cityData.name,
+            latitude: cityData.latitude,
+            longitude: cityData.longitude,
+            confidence: cityData.confidence * 0.80,
+            source: 'google-search'
+          };
+        }
+      }
+    } catch (e) {
+      console.log(`  [Google search extraction failed] Continuing with other extraction methods...`);
     }
   }
 

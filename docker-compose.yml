@@ -5,6 +5,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+    image: jrustyhaner/towncrier-server:dev
     ports:
       - "3001:3001"
     environment:
@@ -20,6 +21,7 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    image: jrustyhaner/towncrier-frontend:dev
     ports:
         - "8083:8081"
     environment:

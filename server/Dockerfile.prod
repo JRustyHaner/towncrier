@@ -1,0 +1,49 @@
+# Build stage
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install Puppeteer dependencies for google-news-scraper
+RUN apk add --no-cache \
+    chromium \
+    ca-certificates \
+    python3 \
+    make \
+    g++
+
+# Set Puppeteer to use system Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+COPY package.json package-lock.json* ./
+
+RUN npm ci
+
+COPY src ./src
+COPY tsconfig.json ./
+COPY data ./data
+
+RUN npm run build
+
+# Runtime stage
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install only runtime dependencies (Chromium for Puppeteer)
+RUN apk add --no-cache chromium ca-certificates
+
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser \
+    NODE_ENV=production
+
+# Copy built app from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+COPY data ./data
+
+EXPOSE 3001
+
+# Use npm start with production flag
+CMD ["npm", "start"]
