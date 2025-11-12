@@ -2,7 +2,7 @@
  * API Client for backend communication
  */
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
 
 export interface Article {
   id: string;
@@ -15,6 +15,14 @@ export interface Article {
   status: string;
   city: string;
   confidence: number;
+  sentiment?: { score: number; comparative: number };
+  sentimentLabel?: string;
+  trendValue?: number;
+  valence?: number; // -1 to 1 for sentiment valence (red to grey to blue)
+  category?: 'retraction' | 'original' | 'correction' | 'disputed' | 'misleading';
+  bias?: number; // -30 to 30 from media bias CSV
+  factualReporting?: 'MIXED' | 'HIGH' | 'VERY_HIGH';
+  firstArticleTime?: number;
 }
 
 export interface GeoJSONFeature {

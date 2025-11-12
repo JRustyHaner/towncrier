@@ -3,7 +3,7 @@
 # Test /api/search endpoint for Newsdata fetch, rate limit warning, and graceful fallback
 
 set -e
-API_URL="http://localhost:3000/api/search"
+API_URL="http://localhost:3001/api/search"
 TERMS='{"terms": ["election", "policy"], "limit": 5}'
 
 # Test with API key (should use real Newsdata)

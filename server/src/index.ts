@@ -3,16 +3,34 @@ import express from 'express';
 import cors from 'cors';
 import { randomUUID } from 'node:crypto';
 import { newsdataFetcher } from './services/newsdataFetcher.js';
+import Sentiment from 'sentiment';
+import { extractArticleText } from './services/article-text-extractor/extractArticleText.js';
 import { HybridFetcher } from './services/hybridFetcher.js';
 import { extractCity } from './services/cityExtractor.js';
 import { classifyStatus, analyzeMisinformationMetrics } from './services/statusClassifier.js';
 import { getSources } from './services/newsdataFetcher.js';
 import { fetchTrendData, compareTrends, analyzeTrendPhases } from './services/googleTrendsFetcher.js';
 import { generateTrendPolygons, generateTimeWindowHeatmap } from './services/trendPolygonGenerator.js';
+import { mediaBiasLookup } from './services/mediaBiasLookup.js';
+import { filterArticlesBySimilarity, getSimilarityStats } from './services/jaccardSimilarity.js';
+import trendsPuppeteerRouter from './services/trendsPuppeteerRouter.js';
+import dataForSeoRouter from './services/dataForSeoRouter.js';
+import dataForSeoTrendsRouter from './services/dataForSeoTrendsRouter.js';
+import stateTrendPolygonsRouter from './services/stateTrendPolygonsRouter.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use('/api/trends', trendsPuppeteerRouter);
+
+// DataForSEO Google Trends API route
+app.use('/api/trends', dataForSeoTrendsRouter);
+
+// DataForSEO SERP API route
+app.use('/api/serp', dataForSeoRouter);
+
+// US State polygons with trend data
+app.use('/api/trends', stateTrendPolygonsRouter);
 
 // Initialize hybrid fetcher to combine NewsData.io and Google News
 const hybridFetcher = new HybridFetcher();
@@ -55,9 +73,17 @@ interface GeoJSONFeature {
     status: string;
     statusConfidence: number;
     statusReason: string;
-    detectedSignals?: string[]; // Misinformation signals detected
+    detectedSignals?: string[];
     city: string;
     confidence: number;
+    sentiment?: { score: number; comparative: number };
+    sentimentLabel?: string;
+    valence?: number;
+    category?: string;
+    bias?: number;
+    factualReporting?: 'MIXED' | 'HIGH' | 'VERY_HIGH';
+    trendValue?: number;
+    firstArticleTime?: number;
   };
 };
 
@@ -72,18 +98,16 @@ const activeSearches: Record<string, SearchResult> = {};
 const colorMap: Record<string, string> = {
   retraction: '#ef4444',
   correction: '#f59e0b',
-  original: '#22c55e',
-  inciting: '#137fec',
-  disputed: '#a78bfa',
-  misleading: '#f97316'
+  'news-article': '#22c55e',
+  'biased-source': '#8b5cf6',
+  'untruthful-source': '#d946ef'
 };
 const shapeMap: Record<string, string> = {
   retraction: 'circle',
   correction: 'square',
-  original: 'triangle',
-  inciting: 'ring',
-  disputed: 'hexagon',
-  misleading: 'diamond'
+  'news-article': 'triangle',
+  'biased-source': 'hexagon',
+  'untruthful-source': 'diamond'
 };
 
 // Health check endpoint
@@ -97,10 +121,9 @@ app.get('/api/legend', (_req, res) => {
     statuses: {
       retraction: { color: colorMap.retraction, shape: shapeMap.retraction, label: 'Retraction' },
       correction: { color: colorMap.correction, shape: shapeMap.correction, label: 'Correction' },
-      original: { color: colorMap.original, shape: shapeMap.original, label: 'Original' },
-      inciting: { color: colorMap.inciting, shape: shapeMap.inciting, label: 'Inciting' },
-      disputed: { color: colorMap.disputed, shape: shapeMap.disputed, label: 'Disputed' },
-      misleading: { color: colorMap.misleading, shape: shapeMap.misleading, label: 'Misleading' }
+      'news-article': { color: colorMap['news-article'], shape: shapeMap['news-article'], label: 'News Article' },
+      'biased-source': { color: colorMap['biased-source'], shape: shapeMap['biased-source'], label: 'Biased Source' },
+      'untruthful-source': { color: colorMap['untruthful-source'], shape: shapeMap['untruthful-source'], label: 'Untruthful Source' }
     }
   });
 });
@@ -149,24 +172,92 @@ app.post('/api/search', async (req, res) => {
   // Process in background
   (async () => {
     try {
-      const articles = await hybridFetcher.fetchArticles(terms, { limit, sources: searchSources });
+      let articles = await hybridFetcher.fetchArticles(terms, { limit, sources: searchSources });
+      
+      // Filter articles by word overlap with combined vocabulary
+      // Keeps articles that share at least 1 word with other articles
+      // This removes only completely off-topic noise
+      const preSimilarityCount = articles.length;
+      articles = filterArticlesBySimilarity(articles, 1);
+      console.log(`[Search] Jaccard filter: ${preSimilarityCount} → ${articles.length} articles`);
+      
+      // Get similarity stats for debugging
+      const stats = getSimilarityStats(articles, 1);
+      console.log(`[Search] Word overlap stats - Mean: ${stats.mean.toFixed(2)} words, Min: ${stats.min}, Max: ${stats.max}`);
+      
       const features: GeoJSONFeature[] = [];
       const summaryStats = { 
         total: 0, 
         retractions: 0, 
         corrections: 0, 
-        originals: 0, 
-        inciting: 0,
-        disputed: 0,
-        misleading: 0
+        newsArticles: 0,
+        biasedSources: 0,
+        untruthfulSources: 0
       };
       const classifications: any[] = [];
+      const sentiment = new Sentiment();
+      const sentimentScores: Array<{ id: string; score: number; comparative: number; }> = [];
 
-      articles.slice(0, limit).forEach((article, index) => {
-        const city = extractCity(`${article.title} ${article.description}`, index, article.source, article.title);
-        const statusClassification = classifyStatus(`${article.title} ${article.description}`, article.content);
+      // Scrape missing article content in parallel (for those without content)
+      const articlesWithContent = await Promise.all(
+        articles.slice(0, limit).map(async (article) => {
+          if (!article.content && article.link) {
+            try {
+              const scraped = await extractArticleText(article.link);
+              return { ...article, content: scraped || '' };
+            } catch (e) {
+              return { ...article, content: '' };
+            }
+          }
+          return article;
+        })
+      );
 
+      // Initialize media bias lookup
+      await mediaBiasLookup.initialize();
+
+      // Track first article time per location for size encoding
+      const locationFirstArticleTime: Map<string, number> = new Map();
+
+      // Process each article with bias lookup
+      for (let i = 0; i < articlesWithContent.length; i++) {
+        const article = articlesWithContent[i];
+        const city = extractCity(`${article.title} ${article.description}`, i, article.source, article.title);
+        
+        // Look up media bias and factual reporting ratings first
+        // Try by source name first (works better for Google News), then by URL
+        const biasRating = await mediaBiasLookup.lookupSource(
+          article.sourceUrl || article.link,
+          article.source // Pass source name as second parameter
+        );
+        
+        // Classify with bias and factual reporting data
+        const statusClassification = classifyStatus(
+          `${article.title} ${article.description}`,
+          article.content,
+          biasRating?.biasRating,
+          biasRating?.factualReportingRating
+        );
         classifications.push(statusClassification);
+
+        // Sentiment analysis on title + description + content (now with scraped content if available)
+        const text = [article.title, article.description, article.content].filter(Boolean).join(' ');
+        const sentimentResult = sentiment.analyze(text);
+        sentimentScores.push({
+          id: article.id,
+          score: sentimentResult.score,
+          comparative: sentimentResult.comparative
+        });
+
+        // Calculate valence from sentiment (normalized to -1 to 1)
+        const valence = Math.max(-1, Math.min(1, sentimentResult.comparative * 2));
+
+        // Track first article timestamp at this location
+        const locationKey = `${city.latitude},${city.longitude}`;
+        const publishTime = new Date(article.publishDate).getTime();
+        if (!locationFirstArticleTime.has(locationKey)) {
+          locationFirstArticleTime.set(locationKey, publishTime);
+        }
 
         features.push({
           type: 'Feature',
@@ -187,18 +278,27 @@ app.post('/api/search', async (req, res) => {
             statusReason: statusClassification.reason,
             detectedSignals: statusClassification.signals || [],
             city: city.name,
-            confidence: city.confidence
+            confidence: city.confidence,
+            sentiment: {
+              score: sentimentResult.score,
+              comparative: sentimentResult.comparative
+            },
+            sentimentLabel: sentimentResult.score > 0 ? 'positive' : sentimentResult.score < 0 ? 'negative' : 'neutral',
+            valence: valence,
+            category: statusClassification.status,
+            bias: biasRating?.biasRating || undefined,
+            factualReporting: biasRating?.factualReportingRating || undefined,
+            firstArticleTime: locationFirstArticleTime.get(locationKey)
           }
         });
 
         summaryStats.total++;
         if (statusClassification.status === 'retraction') summaryStats.retractions++;
         else if (statusClassification.status === 'correction') summaryStats.corrections++;
-        else if (statusClassification.status === 'original') summaryStats.originals++;
-        else if (statusClassification.status === 'inciting') summaryStats.inciting++;
-        else if (statusClassification.status === 'disputed') summaryStats.disputed++;
-        else if (statusClassification.status === 'misleading') summaryStats.misleading++;
-      });
+        else if (statusClassification.status === 'news-article') summaryStats.newsArticles++;
+        else if (statusClassification.status === 'biased-source') summaryStats.biasedSources++;
+        else if (statusClassification.status === 'untruthful-source') summaryStats.untruthfulSources++;
+      }
 
       const geojson = {
         type: 'FeatureCollection',
@@ -220,7 +320,8 @@ app.post('/api/search', async (req, res) => {
           potentialMisinformation: misinfoMetrics.potentialMisinformation,
           misdirectedContent: misinfoMetrics.misdirectedContent,
           topSignals: Array.from(misinfoMetrics.topSignals.entries())
-        }
+        },
+        sentimentScores
       };
     } catch (error) {
       console.error('Search error:', error);
@@ -467,7 +568,7 @@ app.get('/api/trends/:keyword', async (req, res) => {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3001;
 app.listen(port, () => {
   console.log(`server listening on :${port}`);
 });

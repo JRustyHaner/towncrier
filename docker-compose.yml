@@ -6,23 +6,24 @@ services:
       context: ./server
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "3001:3001"
     environment:
-      - NODE_ENV=development
-      - PORT=3000
+      - PORT=3001
       - NEWSDATA_API_KEY=${NEWSDATA_API_KEY}
+      - DATAFORSEO_API_KEY=jrhaner@memphis.edu
+      - DATAFORSEO_API_SECRET=3d2f70c957f6bbb7
     volumes:
       - ./server/src:/app/src
-    command: npm run dev
+  # command: npm run dev
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "8081:8081"
+        - "8083:8081"
     environment:
-      - EXPO_PUBLIC_API_URL=http://server:3000
+      - EXPO_PUBLIC_API_URL=http://server:3001
     volumes:
       - ./frontend:/app
       - /app/node_modules

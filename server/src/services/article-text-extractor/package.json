@@ -1,0 +1,10 @@
+{
+  "name": "article-text-extractor",
+  "version": "1.0.0",
+  "description": "Helper for extracting full article text from URLs using node-readability.",
+  "main": "extractArticleText.ts",
+  "type": "module",
+  "dependencies": {
+    "node-readability": "^0.5.0"
+  }
+}

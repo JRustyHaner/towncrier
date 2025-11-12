@@ -17,6 +17,7 @@ class HybridFetcher {
   /**
    * Fetch articles from both sources with timeout handling
    * Always combines NewsData.io API and Google News for maximum coverage
+   * Also searches for retractions and corrections related to the terms
    */
   async fetchArticles(
     terms: string[],
@@ -27,17 +28,32 @@ class HybridFetcher {
     try {
       console.log(`Hybrid fetch: searching for "${terms.join(', ')}" (limit: ${limit})`);
 
-      // Fetch from both sources in parallel for speed
-      const [newsDataArticles, googleNewsArticles] = await Promise.all([
-        this.fetchFromNewsData(terms, options).catch((error) => {
-          console.warn('NewsData.io fetch failed:', error);
-          return [];
-        }),
-        this.fetchFromGoogleNews(terms, options).catch((error) => {
-          console.warn('Google News fetch failed:', error);
-          return [];
-        })
-      ]);
+      // Build search terms: original + "retraction + term" + "correction + term"
+      const expandedTerms: string[][] = [
+        terms, // Original search
+        ...terms.map(term => ['retraction', term]), // retraction + each term
+        ...terms.map(term => ['correction', term])  // correction + each term
+      ];
+
+      // Fetch from both sources in parallel for speed, for each term set
+      const allResults = await Promise.all(
+        expandedTerms.map(expandedTerm =>
+          Promise.all([
+            this.fetchFromNewsData(expandedTerm, options).catch((error) => {
+              console.warn(`NewsData.io fetch failed for "${expandedTerm.join(' ')}"`, error);
+              return [];
+            }),
+            this.fetchFromGoogleNews(expandedTerm, options).catch((error) => {
+              console.warn(`Google News fetch failed for "${expandedTerm.join(' ')}"`, error);
+              return [];
+            })
+          ])
+        )
+      );
+
+      // Flatten the results
+      const newsDataArticles = allResults.flatMap(([newsData]) => newsData);
+      const googleNewsArticles = allResults.flatMap(([, googleNews]) => googleNews);
 
       console.log(`Hybrid fetch results: ${newsDataArticles.length} from NewsData.io, ${googleNewsArticles.length} from Google News`);
 

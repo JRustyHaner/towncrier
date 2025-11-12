@@ -16,6 +16,7 @@ export interface Article {
   publishDate: string;
   description: string;
   source: string;
+  sourceUrl?: string;
   content?: string;
   image?: string;
 }

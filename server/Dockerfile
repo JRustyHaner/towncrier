@@ -17,7 +17,10 @@ RUN npm ci
 
 COPY src ./src
 COPY tsconfig.json ./
+COPY data ./data
 
-EXPOSE 3000
+EXPOSE 3001
 
-CMD ["npm", "run", "dev"]
+RUN npm run build
+
+CMD ["npm", "start"]

@@ -1,10 +1,10 @@
 /**
  * Enhanced Status Classifier - Phase 1
- * Marks articles as 'original', 'correction', 'retraction', or 'inciting'
- * Uses comprehensive keyword detection, semantic analysis, and content patterns
+ * Classifies articles into categories based on content and source credibility
+ * Categories: retraction, correction, news-article, biased-source, untruthful-source
  */
 
-export type ArticleStatus = 'original' | 'correction' | 'retraction' | 'inciting' | 'disputed' | 'misleading';
+export type ArticleStatus = 'retraction' | 'correction' | 'news-article' | 'biased-source' | 'untruthful-source';
 
 export interface ClassifiedStatus {
   status: ArticleStatus;
@@ -152,16 +152,23 @@ const disputedPhrases = [
 ];
 
 /**
- * Classify article status based on comprehensive analysis
+ * Classify article status based on content analysis and source credibility
  * @param text - Title and description of article combined
  * @param contentSample - Optional full article content for deeper analysis
+ * @param bias - Media source bias rating (-30 to +30)
+ * @param factualReporting - Media source factual reporting rating (MIXED/HIGH/VERY_HIGH)
  */
-export function classifyStatus(text: string, contentSample?: string): ClassifiedStatus {
+export function classifyStatus(
+  text: string,
+  contentSample?: string,
+  bias?: number,
+  factualReporting?: string
+): ClassifiedStatus {
   const lowerText = text.toLowerCase();
   const fullContent = (text + ' ' + (contentSample || '')).toLowerCase();
   const signals: string[] = [];
   let confidenceScore = 0;
-  let detectedStatus: ArticleStatus = 'original';
+  let detectedStatus: ArticleStatus = 'news-article';
 
   // PRIORITY 1: Check for explicit retractions (highest priority)
   for (const keyword of retractionKeywords) {
@@ -185,58 +192,37 @@ export function classifyStatus(text: string, contentSample?: string): Classified
     }
   }
 
-  // PRIORITY 3: Check for inciting language
-  if (confidenceScore < 0.8) {
-    for (const keyword of incitingKeywords) {
-      if (lowerText.includes(keyword)) {
-        signals.push(`inciting-language: "${keyword}"`);
-        confidenceScore = Math.max(confidenceScore, 0.80);
-        detectedStatus = 'inciting';
-        break;
-      }
-    }
+  // PRIORITY 3: Check for untruthful source (Mixed factual reporting)
+  if (confidenceScore < 0.8 && factualReporting === 'MIXED') {
+    signals.push(`mixed-factual-reporting`);
+    confidenceScore = Math.max(confidenceScore, 0.80);
+    detectedStatus = 'untruthful-source';
   }
 
-  // PRIORITY 4: Detect misinformation patterns (in full content if available)
-  if (contentSample || fullContent.length > text.length) {
-    const misinfoScore = detectMisinformationPatterns(fullContent, signals);
-    if (misinfoScore > 0) {
-      if (misinfoScore > confidenceScore) {
-        confidenceScore = misinfoScore;
-        detectedStatus = misinfoScore > 0.75 ? 'misleading' : 'disputed';
-      }
-    }
+  // PRIORITY 4: Check for biased source (bias ±5 or more from center)
+  if (confidenceScore < 0.7 && bias !== undefined && (bias <= -5 || bias >= 5)) {
+    signals.push(`biased-source: ${bias > 0 ? '+' : ''}${bias}`);
+    confidenceScore = Math.max(confidenceScore, 0.70);
+    detectedStatus = 'biased-source';
   }
 
-  // PRIORITY 5: Check for disputed language (even without content)
-  if (confidenceScore < 0.6) {
-    for (const phrase of disputedPhrases) {
-      if (fullContent.includes(phrase)) {
-        signals.push(`disputed-language: "${phrase}"`);
-        confidenceScore = Math.max(confidenceScore, 0.55);
-        detectedStatus = 'disputed';
-        break;
-      }
-    }
-  }
-
-  // Default to original if no signals detected
-  if (detectedStatus === 'original' && signals.length === 0) {
+  // If we still have no signals, it's a standard news article
+  if (signals.length === 0) {
     return {
-      status: 'original',
+      status: 'news-article',
       confidence: 1.0,
-      reason: 'No misinformation signals detected',
+      reason: 'Standard news article - meets all criteria',
       signals: []
     };
   }
 
   const reason = signals.length > 0
     ? `Detected: ${signals.slice(0, 2).join('; ')}`
-    : 'Classification review recommended';
+    : 'Standard news article';
 
   return {
     status: detectedStatus,
-    confidence: Math.min(Math.max(confidenceScore, 0.6), 1.0), // Ensure minimum 0.6 confidence when signals detected
+    confidence: Math.min(Math.max(confidenceScore, 0.6), 1.0),
     reason,
     signals
   };
@@ -329,15 +315,17 @@ export function analyzeMisinformationMetrics(
   let misdirectedContent = 0;
 
   for (const classification of classifications) {
-    if (classification.status !== 'original' && classification.confidence > 0.80) {
+    if ((classification.status === 'retraction' || classification.status === 'correction' || 
+         classification.status === 'untruthful-source' || classification.status === 'biased-source') && 
+        classification.confidence > 0.80) {
       highConfidenceIncidents++;
     }
 
-    if ((classification.status === 'misleading' || classification.status === 'disputed') && classification.confidence > 0.60) {
+    if ((classification.status === 'untruthful-source' || classification.status === 'biased-source') && classification.confidence > 0.60) {
       potentialMisinformation++;
     }
 
-    if (classification.status === 'inciting') {
+    if (classification.status === 'retraction') {
       misdirectedContent++;
     }
 

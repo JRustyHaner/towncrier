@@ -17,6 +17,9 @@
     "google-news-scraper": "^2.7.0",
     "google-trends-api": "^4.9.2",
     "node-fetch": "^3.3.2",
+    "node-readability": "^3.0.0",
+    "puppeteer": "^24.29.1",
+    "sentiment": "^5.0.2",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
