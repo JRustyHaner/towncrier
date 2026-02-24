@@ -18,6 +18,10 @@ import dataForSeoRouter from './services/dataForSeoRouter.js';
 import dataForSeoTrendsRouter from './services/dataForSeoTrendsRouter.js';
 import stateTrendPolygonsRouter from './services/stateTrendPolygonsRouter.js';
 
+// in memory injested news articles store for chunked Google News ingestion from clients
+const ingestedGoogleNewsArticles: any[] = [];
+
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -667,6 +671,113 @@ app.get('/api/trends/:keyword', async (req, res) => {
       error: 'Failed to fetch trend data',
       message: error instanceof Error ? error.message : 'Unknown error',
       keyword
+    });
+  }
+});
+
+// Proxy endpoint for Google News RSS
+// Allows frontend to fetch Google News through the backend to bypass CORS issues
+app.get('/api/google-news/proxy', async (req, res) => {
+  try {
+    const { q, start = 0 } = req.query;
+
+    if (!q) {
+      return res.status(400).json({ error: 'Missing search query parameter' });
+    }
+
+    const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(q as string)}&start=${start}`;
+    
+    console.log(`[Google News Proxy] Fetching: ${feedUrl}`);
+
+    const response = await fetch(feedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Google News returned ${response.status}` });
+    }
+
+    const text = await response.text();
+    res.set('Content-Type', 'application/rss+xml');
+    res.send(text);
+
+  } catch (error) {
+    console.error('[Google News Proxy] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch Google News',
+      details: (error as Error).message 
+    });
+  }
+});
+
+// In memory store for ingested Google News articles, containing a key identifier and converted articles
+const ingestedGoogleNewsArticles: { key: string; articles: any[] }[] = [];
+
+
+// Endpoint to receive Google News articles fetched by the client
+// This avoids IP blocking issues by having the browser fetch Google News
+// These are chunked and sent from the frontend after being fetched via CORS proxies
+// so we must accept multiple requests and store them temporarily
+app.post('/api/google-news/ingest', async (req, res) => {
+  try {
+    const { articles = [], searchTerms = [] } = req.body || {};
+
+    if (!articles || articles.length === 0) {
+      return res.status(400).json({ 
+        status: 'error',
+        message: 'No articles provided',
+        received: 0
+      });
+    }
+
+    // Convert client-fetched Google News articles to server article format
+    const convertedArticles = articles.map((article: any) => ({
+      id: `google-news-${Date.now()}-${Math.random()}`,
+      title: article.title || '',
+      author: article.author || 'Unknown',
+      source: article.source || 'Google News',
+      publishDate: article.publishDate || new Date().toISOString(),
+      link: article.link || '',
+      description: article.description || '',
+      content: article.description || '',
+      image: article.imageUrl || undefined,
+      language: 'en',
+      country: 'US',
+      source_type: 'google-news-client'
+    }));
+
+
+
+    console.log(`[Google News Ingest] Received ${convertedArticles.length} articles from client for terms: ${searchTerms.join(', ')}`);
+
+    // Store the articles in a temporary cache or process them immediately
+    // For now, we'll add them to a temporary collection that can be used by search endpoint
+    const ingestedNewsKey = `google-news-ingested-${Date.now()}`;
+
+    ingestedGoogleNewsArticles.push({
+      key: ingestedNewsKey,
+      articles: convertedArticles
+    });
+
+    console.log(`[Google News Ingest] Stored ${convertedArticles.length} articles under key: ${ingestedNewsKey}`);
+
+    
+    // In a production system, you might store these in a database
+    // For now, just acknowledge receipt
+    res.json({
+      status: 'received',
+      received: convertedArticles.length,
+      ingestedNewsKey
+    });
+
+  } catch (error) {
+    console.error('Error ingesting Google News articles:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to ingest Google News articles',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });

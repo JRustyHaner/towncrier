@@ -1,6 +1,11 @@
 /**
  * Hybrid News Fetcher - Combines NewsData.io API and Google News Scraper
  * Provides fallback mechanism and dual-source enrichment
+ * 
+ * DEPRECATED: Google News scraping has been moved to the frontend to avoid server IP blocking.
+ * The client-side scraper at frontend/api/googleNewsClient.ts is now the primary source.
+ * This backend scraper is kept as a fallback only and may not work due to IP restrictions.
+ * See frontend/api/googleNewsClient.ts for the new implementation using DOM parsing.
  */
 
 import { newsdataFetcher, Article } from './newsdataFetcher.js';
@@ -14,6 +19,49 @@ export interface HybridArticle extends Article {
 class HybridFetcher {
   private newsDataTimeout: number = 8000; // 8 seconds
   private googleNewsTimeout: number = 10000; // 10 seconds
+  private cachedProxies: Array<{ host: string; port: number }> = [];
+  private lastProxyFetch: number = 0;
+  private proxyFetchInterval: number = 300000; // 5 minutes
+
+  /**
+   * Get cached proxies or fetch new ones
+   */
+  private async getProxies(): Promise<Array<{ host: string; port: number }>> {
+    const now = Date.now();
+    
+    // Return cached proxies if still fresh
+    if (this.cachedProxies.length > 0 && now - this.lastProxyFetch < this.proxyFetchInterval) {
+      return this.cachedProxies;
+    }
+
+    try {
+      console.log('Fetching free proxies from sslproxies.org...');
+      const proxies = await getProxies();
+      
+      if (proxies && Array.isArray(proxies)) {
+        console.log(`Successfully loaded ${proxies.length} proxies`);
+        if (proxies.length > 0) {
+          this.cachedProxies = proxies;
+          this.lastProxyFetch = now;
+          return proxies;
+        } else {
+          console.warn('Proxy service returned empty list');
+          return [];
+        }
+      } else {
+        console.warn('Invalid proxy response format:', typeof proxies);
+        return [];
+      }
+    } catch (err) {
+      console.error('Failed to fetch proxies:', err);
+      // Return any cached proxies even if expired
+      if (this.cachedProxies.length > 0) {
+        console.log(`Using ${this.cachedProxies.length} cached proxies (expired)`);
+        return this.cachedProxies;
+      }
+      return [];
+    }
+  }
 
   /**
    * Fetch articles from both sources with timeout handling
@@ -107,6 +155,10 @@ class HybridFetcher {
 
   /**
    * Fetch from Google News Scraper with pagination support and proxy fallback
+   * 
+   * DEPRECATED: This method is no longer recommended. Use frontend/api/googleNewsClient.ts instead.
+   * The frontend now handles Google News scraping using DOM parsing to avoid server IP blocking.
+   * This method is kept for backward compatibility but may fail due to IP restrictions.
    */
   private async fetchFromGoogleNews(
     terms: string[],
@@ -123,13 +175,8 @@ class HybridFetcher {
       const seenTitles = new Set<string>();
 
       // Try to get free proxies
-      let proxies: Array<{ host: string; port: number }> = [];
-      try {
-        proxies = await getProxies();
-        console.log(`Loaded ${proxies.length} free proxies for Google News scraping`);
-      } catch (err) {
-        console.warn('Failed to load free proxies, will attempt without proxy:', err);
-      }
+      const proxies = await this.getProxies();
+      console.log(`Using ${proxies.length} available proxies for Google News scraping`);
 
       // Make multiple requests to get more results
       // Google News typically returns ~40 results per request

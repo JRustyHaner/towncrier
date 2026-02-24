@@ -21,8 +21,20 @@ import SentimentTimelineGraph from './components/SentimentTimelineGraph';
 import TrendGraphView from './components/TrendGraphView';
 import SentimentGraphView from './components/SentimentGraphView';
 import TrendValueSelector, { TrendValueMode } from './components/TrendValueSelector';
+import { fetchGoogleNewsBacklog } from './api/googleNewsClient';
+import { sendGoogleNewsArticles, sendGoogleNewsArticlesInChunks } from './api/sendGoogleNews';
 
 const { width, height } = Dimensions.get('window');
+
+// Determine API URL based on environment
+// In browser: use localhost (exposed via port 3001)
+// In Node: use http://server:3001 (Docker service)
+const API_BASE_URL = (() => {
+  const env = process.env.EXPO_PUBLIC_API_URL;
+  if (env) return env;
+  // Default to localhost for browser access
+  return 'http://localhost:3001';
+})();
 
 interface Article {
   id: string;
@@ -81,8 +93,6 @@ interface TrendPolygon {
   };
 }
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
-
 export default function App() {
   const [isDark, setIsDark] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -108,6 +118,8 @@ export default function App() {
   }>>([]);
   const [analysisComplete, setAnalysisComplete] = useState(false);
   const [trendValueMode, setTrendValueMode] = useState<TrendValueMode>('max');
+  const [googleNewsProgressTerm, setGoogleNewsProgressTerm] = useState('');
+  const [googleNewsProgressCount, setGoogleNewsProgressCount] = useState(0);
 
   // Color scheme
   const colors = isDark
@@ -542,6 +554,43 @@ export default function App() {
     );
   };
 
+  /**
+   * Fetch Google News from client-side scraper with fallback to backend
+   * This uses the frontend to avoid server IP blocking
+   * If it fails, the backend scraper will still work (graceful degradation)
+   */
+  const fetchGoogleNewsWithFallback = async (terms: string[]) => {
+    try {
+      console.log('[Google News] Attempting client-side fetch with backlog support...');
+      updateProgressStep('Fetching Google News (client)', 'in-progress');
+      
+      // Try to fetch from client (includes historical data via timeframes)
+      const articles = await fetchGoogleNewsBacklog(terms, 500);
+      
+      if (articles.length > 0) {
+        console.log(`[Google News] Successfully fetched ${articles.length} articles from client`);
+        
+        // Send to server for ingestion (optional, for caching/stats)
+        try {
+          await sendGoogleNewsArticlesInChunks(articles, terms);
+          console.log('[Google News] Sent articles to server for ingestion');
+        } catch (err) {
+          console.warn('[Google News] Failed to send articles to server (non-critical):', err);
+        }
+        
+        completeProgressStep('Fetching Google News (client)');
+        return articles;
+      }
+    } catch (error) {
+      console.warn('[Google News] Client fetch failed, will fallback to backend:', error);
+      updateProgressStep('Fetching Google News (client)', 'error');
+    }
+    
+    // If client fetch fails or returns no results, backend will handle it
+    console.log('[Google News] Client fetch unavailable, backend scraper will provide data');
+    return [];
+  };
+
   const handleSearch = async () => {
     const allSteps = [
       'Generating search terms',
@@ -567,10 +616,36 @@ export default function App() {
     try {
       // Generate search terms organized by category
       completeProgressStep('Generating search terms');
-      updateProgressStep('Searching original articles');
+      
       const { original, negation, bias } = generateSearchTerms(searchTerm);
       
+      // Try to fetch Google News from client-side first (optional, non-blocking)
+      try {
+        console.log('[App] Attempting client-side Google News fetch...');
+        updateProgressStep('Fetching Google News (client)', 'in-progress');
+        const googleNewsArticles = await fetchGoogleNewsBacklog(original, 300, 3, (term, count) => {
+          setGoogleNewsProgressTerm(term);
+          setGoogleNewsProgressCount(count);
+          setProgressStep(`[Google News] "${term}": ${count} articles collected`);
+        });
+        console.log(`[App] Got ${googleNewsArticles.length} articles from client`);
+        
+        if (googleNewsArticles.length > 0) {
+          try {
+            await sendGoogleNewsArticlesInChunks(googleNewsArticles, original);
+            console.log('[App] Sent articles to server for ingestion');
+          } catch (err) {
+            console.warn('[App] Failed to send articles to server (non-critical):', err);
+          }
+        }
+        completeProgressStep('Fetching Google News (client)');
+      } catch (error) {
+        console.warn('[App] Client Google News fetch failed (will use backend):', error);
+        updateProgressStep('Fetching Google News (client)', 'error');
+      }
+      
       // Make separate API calls for each category to get distinct results
+      updateProgressStep('Searching original articles');
       const originalRes = await fetch(`${API_BASE_URL}/api/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
